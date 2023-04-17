@@ -140,3 +140,91 @@ class DecodingBlock(nn.Module):
             x = resnet_block(x, temb)
             x = attn_block(x)
         return self.upsample(x)
+    
+class Encoder(nn.Module):
+    def __init__(
+        self, in_channels, z_channels=4, z_double=True, num_channels=128, channels_mult=[1, 2, 4, 4], 
+        num_res_blocks=2, attn=[False, False, False, False]
+        ) -> None:
+        super().__init__()
+        assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
+        self.z_channels = z_channels if not z_double else z_channels * 2
+        self.channels_mult = [1, *channels_mult]
+        self.attn = attn
+        
+        # architecture modules
+        self.in_conv = nn.Conv2d(in_channels, num_channels, kernel_size=3, padding='same')
+        self.enocoder = nn.ModuleList([
+            EncodingBlock(
+                in_channels=num_channels * self.channels_mult[idx],
+                out_channels=num_channels * self.channels_mult[idx + 1],
+                temb_dim=None,
+                num_blocks=num_res_blocks,
+                attn=self.attn[idx],
+                downsample=True
+            ) for idx in range(self.channels_mult.__len__() - 1)
+        ])
+        
+        bottleneck_channels = num_channels * self.channels_mult[-1]
+        self.bottle_neck = nn.Sequential(
+            ResidualBlock(in_channels=bottleneck_channels, out_channels=bottleneck_channels, temb_dim=None, groups=8),
+            SelfAttention(in_channels=bottleneck_channels, num_heads=8, head_dim=32, groups=8),
+            ResidualBlock(in_channels=bottleneck_channels, out_channels=bottleneck_channels, temb_dim=None, groups=8)
+        )
+        self.out_conv = nn.Sequential(
+            nn.GroupNorm(num_groups=8, num_channels=bottleneck_channels),
+            nn.SiLU(),
+            nn.Conv2d(in_channels=bottleneck_channels, out_channels=self.z_channels, kernel_size=3, padding=1)
+        )
+    
+    def forward(self, x):
+        x = self.in_conv(x)
+        for encoder in self.enocoder:
+            x = encoder(x)
+        x = self.bottle_neck(x)
+        x = self.out_conv(x)
+        return x
+    
+class Decoder(nn.Module):
+    def __init__(
+        self, out_channels, z_channels, z_double=True, num_channels=128, channels_mult=[1, 2, 4, 4],
+        num_res_blocks=2, attn=[False, False, False, False]
+        ) -> None:
+        super().__init__()
+        assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
+        self.channels_mult = list(reversed([1, *channels_mult]))
+        self.attn = list(reversed(attn))
+        self.z_channels = z_channels if not z_double else z_channels * 2
+        
+        # architecture modules
+        bottleneck_channels = num_channels * self.channels_mult[0]
+        self.in_conv = nn.Conv2d(self.z_channels, bottleneck_channels, kernel_size=3, padding='same')
+        self.bottleneck = nn.Sequential(
+            ResidualBlock(in_channels=bottleneck_channels, out_channels=bottleneck_channels, temb_dim=None, groups=8),
+            SelfAttention(in_channels=bottleneck_channels, num_heads=8, head_dim=32, groups=8),
+            ResidualBlock(in_channels=bottleneck_channels, out_channels=bottleneck_channels, temb_dim=None, groups=8)
+        )
+        self.decoder = nn.ModuleList([
+            DecodingBlock(
+                in_channels=num_channels * self.channels_mult[idx],
+                out_channels=num_channels * self.channels_mult[idx + 1],
+                temb_dim=None,
+                num_blocks=num_res_blocks,
+                attn=self.attn[idx],
+                upsample=True
+            ) for idx in range(self.channels_mult.__len__() - 1)
+        ])
+        
+        self.out_conv = nn.Sequential(
+            nn.GroupNorm(num_groups=8, num_channels=num_channels),
+            nn.SiLU(),
+            nn.Conv2d(in_channels=num_channels, out_channels=out_channels, kernel_size=3, padding=1)
+        )
+        
+    def forward(self, x):
+        x = self.in_conv(x)
+        x = self.bottleneck(x)
+        for decoder in self.decoder:
+            x = decoder(x)
+        x = self.out_conv(x)
+        return x

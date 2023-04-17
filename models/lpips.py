@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision import models
 from collections import namedtuple
 import os, hashlib
 import requests
 from tqdm import tqdm
+from .discriminator import NLayerDiscriminator, weights_init
 
 URL_MAP = {
     "vgg_lpips": "https://heibox.uni-heidelberg.de/f/607503859c864bc1b30b/?dl=1"
@@ -17,7 +19,6 @@ CKPT_MAP = {
 MD5_MAP = {
     "vgg_lpips": "d507d7349b931f0638a25a48a722f98a"
 }
-
 
 class LPIPS(nn.Module):
     # Learned perceptual metric
@@ -87,7 +88,7 @@ class NetLinLayer(nn.Module):
 class vgg16(torch.nn.Module):
     def __init__(self, requires_grad=False, pretrained=True):
         super(vgg16, self).__init__()
-        vgg_pretrained_features = models.vgg16(pretrained=pretrained).features
+        vgg_pretrained_features = models.vgg16(weights=models.VGG16_Weights.DEFAULT).features
         self.slice1 = torch.nn.Sequential()
         self.slice2 = torch.nn.Sequential()
         self.slice3 = torch.nn.Sequential()
@@ -155,3 +156,85 @@ def md5_hash(path):
     with open(path, "rb") as f:
         content = f.read()
     return hashlib.md5(content).hexdigest()
+
+
+class VQLPIPSWithDiscriminator(nn.Module):
+    def __init__(self, 
+            disc_start, codebook_weight=1., pixel_weight=1., perceptual_weight=1., disc_weight=1.,
+            d_input_channels=3, d_channels=64, d_num_layers=3, disc_factor=1.
+        ) -> None:
+        super().__init__()
+        self.codebook_weight = codebook_weight
+        self.pixel_weight = pixel_weight
+        self.perceptual_weight = perceptual_weight
+        self.disc_weight = disc_weight
+        self.disc_factor = disc_factor
+        
+        # modules
+        self.lpips = LPIPS().eval()
+        self.discriminator = NLayerDiscriminator(d_input_channels, d_channels, d_num_layers, use_actnorm=False).apply(weights_init)
+        self.disc_start = disc_start
+
+    def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer=None):
+        if last_layer is not None:
+            nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
+            g_grads = torch.autograd.grad(g_loss, last_layer, retain_graph=True)[0]
+        else:
+            nll_grads = torch.autograd.grad(nll_loss, self.last_layer[0], retain_graph=True)[0]
+            g_grads = torch.autograd.grad(g_loss, self.last_layer[0], retain_graph=True)[0]
+
+        d_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-4)
+        d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
+        d_weight = d_weight * self.discriminator_weight
+        return d_weight
+
+    def forward(self, codebook_loss, x, recon_x, optimizer_idx, global_step, last_layer=None):
+        rec_loss = F.l1_loss(recon_x, x, reduction='none')
+        if self.perceptual_weight > 0:
+            p_loss = self.lpips(x, recon_x)
+            rec_loss = rec_loss + p_loss * self.perceptual_weight # pixel-wise addition of the p_loss
+
+        nll_loss = rec_loss.mean()
+
+        # discriminator loss
+        split = "train" if self.training else "val"
+        if optimizer_idx == 0:
+            logits_fake = self.discriminator(recon_x.contiguous())
+            g_loss = -torch.mean(logits_fake)
+
+            try:
+                d_weight = self.calculate_adaptive_weight(nll_loss, g_loss, last_layer)
+            except RuntimeError:
+                d_weight = torch.tensor(0.0)
+
+            d_factor = self.disc_factor if global_step > self.disc_start else 0.0
+            loss = nll_loss + d_weight * d_factor * g_loss + self.codebook_weight * codebook_loss.mean()
+
+            log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
+                   "{}/quant_loss".format(split): codebook_loss.detach().mean(),
+                   "{}/nll_loss".format(split): nll_loss.detach().mean(),
+                   "{}/rec_loss".format(split): rec_loss.detach().mean(),
+                   "{}/p_loss".format(split): p_loss.detach().mean(),
+                   "{}/d_weight".format(split): d_weight.detach(),
+                   "{}/disc_factor".format(split): torch.tensor(d_factor),
+                   "{}/g_loss".format(split): g_loss.detach().mean(),
+                   }
+            return loss, log
+        
+        if optimizer_idx == 1:
+            logits_real = self.discriminator(x.contiguous().detach())
+            logits_fake = self.discriminator(recon_x.contiguous().detach())
+
+            d_factor = self.disc_factor if global_step > self.disc_start else 0.0
+            d_loss = d_factor * self.hinge_loss(logits_real, logits_fake)
+
+            log = {"{}/disc_loss".format(split): d_loss.clone().detach().mean(),
+                   "{}/logits_real".format(split): logits_real.detach().mean(),
+                   "{}/logits_fake".format(split): logits_fake.detach().mean()
+                   }
+            return d_loss, log
+
+    def hinge_loss(self, logits_real, logits_fake):
+        loss = 0.5 * (torch.mean(F.relu(1.0 - logits_real)) + torch.mean(F.relu(1.0 + logits_fake)))
+        return loss
+        
