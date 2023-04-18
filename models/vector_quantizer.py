@@ -84,11 +84,9 @@ class VectorQuantizer(nn.Module):
 
         # compute loss for embedding
         if not self.legacy:
-            loss = self.beta * torch.mean((z_q.detach()-z)**2) + \
-                   torch.mean((z_q - z.detach()) ** 2)
+            loss = self.beta * torch.mean((z_q.detach() - z)**2) + torch.mean((z_q - z.detach()) ** 2)
         else:
-            loss = torch.mean((z_q.detach()-z)**2) + self.beta * \
-                   torch.mean((z_q - z.detach()) ** 2)
+            loss = torch.mean((z_q.detach() - z)**2) + self.beta * torch.mean((z_q - z.detach()) ** 2)
 
         # preserve gradients
         z_q = z + (z_q - z).detach()

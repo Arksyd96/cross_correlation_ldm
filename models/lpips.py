@@ -1,3 +1,7 @@
+"""
+    Adapted from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/losses/lpips.py
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -51,6 +55,11 @@ class LPIPS(nn.Module):
         return model
 
     def forward(self, input, target):
+        # if input.shape[1] < 3:  # the standard vgg in channels is 3
+        #     B, C, H, W = input.shape
+        #     in0_input = torch.cat([input, torch.zeros(size=(B, 3 - C, H, W)).to(input.device)], dim=1)
+        #     in1_input = torch.cat([target, torch.zeros(size=(B, 3 - C, H, W)).to(target.device)], dim=1)
+    
         in0_input, in1_input = (self.scaling_layer(input), self.scaling_layer(target))
         outs0, outs1 = self.net(in0_input), self.net(in1_input)
         feats0, feats1, diffs = {}, {}, {}
@@ -69,8 +78,10 @@ class LPIPS(nn.Module):
 class ScalingLayer(nn.Module):
     def __init__(self):
         super(ScalingLayer, self).__init__()
-        self.register_buffer('shift', torch.Tensor([-.030, -.088, -.188])[None, :, None, None])
-        self.register_buffer('scale', torch.Tensor([.458, .448, .450])[None, :, None, None])
+        # self.register_buffer('shift', torch.Tensor([-.030, -.088, -.188])[None, :, None, None])
+        # self.register_buffer('scale', torch.Tensor([.458, .448, .450])[None, :, None, None])
+        self.register_buffer('shift', torch.Tensor([-.030, -.088])[None, :, None, None])
+        self.register_buffer('scale', torch.Tensor([.458, .448])[None, :, None, None])
 
     def forward(self, inp):
         return (inp - self.shift) / self.scale
@@ -86,9 +97,15 @@ class NetLinLayer(nn.Module):
 
 
 class vgg16(torch.nn.Module):
-    def __init__(self, requires_grad=False, pretrained=True):
+    def __init__(self, requires_grad=False, weights=models.VGG16_Weights.DEFAULT):
         super(vgg16, self).__init__()
-        vgg_pretrained_features = models.vgg16(weights=models.VGG16_Weights.DEFAULT).features
+        vgg_pretrained_features = models.vgg16(weights=weights).features
+        
+        # getting weights of input channel
+        selected_weights = vgg_pretrained_features[0].weight[:, :2, ...]
+        vgg_pretrained_features[0] = nn.Conv2d(2, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        vgg_pretrained_features[0].weight = nn.Parameter(selected_weights, requires_grad=False)
+
         self.slice1 = torch.nn.Sequential()
         self.slice2 = torch.nn.Sequential()
         self.slice3 = torch.nn.Sequential()
@@ -129,7 +146,7 @@ def normalize_tensor(x,eps=1e-10):
     return x/(norm_factor+eps)
 
 def spatial_average(x, keepdim=True):
-    return x.mean([2,3],keepdim=keepdim)
+    return x.mean([2, 3],keepdim=keepdim)
 
 def get_ckpt_path(name, root, check=False):
     assert name in URL_MAP
@@ -185,7 +202,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
 
         d_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-4)
         d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
-        d_weight = d_weight * self.discriminator_weight
+        d_weight = d_weight * self.disc_weight
         return d_weight
 
     def forward(self, codebook_loss, x, recon_x, optimizer_idx, global_step, last_layer=None):

@@ -10,18 +10,22 @@ class VQAutoencoder(nn.Module):
         in_channels, out_channels, n_embed, embed_dim,
         z_channels=4, z_double=False, 
         num_channels=128, channels_mult=[1, 2, 4, 4], 
-        num_res_blocks=2, attn=[False, False, False, False]   
+        num_res_blocks=2, attn=None
     ) -> None:
         super().__init__()
-        assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
+        if attn is not None:
+            assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
+        else:
+            self.attn = [False] * channels_mult.__len__()
+
         self.embed_dim = embed_dim
         self.n_embed = n_embed
         self.z_channels = z_channels if not z_double else z_channels * 2
 
         # architecture modules
-        self.encoder = Encoder(in_channels, z_channels, z_double, num_channels, channels_mult, num_res_blocks, attn)
-        self.decoder = Decoder(out_channels, z_channels, z_double, num_channels, channels_mult, num_res_blocks, attn)
-        self.quantizer = VectorQuantizer(self.n_embed, self.embed_dim, remap=False)
+        self.encoder = Encoder(in_channels, z_channels, z_double, num_channels, channels_mult, num_res_blocks, self.attn)
+        self.decoder = Decoder(out_channels, z_channels, z_double, num_channels, channels_mult, num_res_blocks, self.attn)
+        self.quantizer = VectorQuantizer(self.n_embed, self.embed_dim, beta=0.25, remap=None)
         self.quant_conv = nn.Conv2d(self.z_channels, self.embed_dim, kernel_size=1)
         self.post_quant_conv = nn.Conv2d(self.embed_dim, self.z_channels, kernel_size=1)
 

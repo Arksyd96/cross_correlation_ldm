@@ -144,10 +144,15 @@ class DecodingBlock(nn.Module):
 class Encoder(nn.Module):
     def __init__(
         self, in_channels, z_channels=4, z_double=True, num_channels=128, channels_mult=[1, 2, 4, 4], 
-        num_res_blocks=2, attn=[False, False, False, False]
+        num_res_blocks=2, attn=None
         ) -> None:
         super().__init__()
-        assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
+        if attn is not None:
+            assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
+            self.attn = attn
+        else:
+            self.attn = [False] * channels_mult.__len__()
+
         self.z_channels = z_channels if not z_double else z_channels * 2
         self.channels_mult = [1, *channels_mult]
         self.attn = attn
@@ -188,12 +193,15 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(
         self, out_channels, z_channels, z_double=True, num_channels=128, channels_mult=[1, 2, 4, 4],
-        num_res_blocks=2, attn=[False, False, False, False]
+        num_res_blocks=2, attn=None
         ) -> None:
         super().__init__()
-        assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
+        if attn is None:
+            assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
+            self.attn = list(reversed(attn))
+        else: 
+            self.attn = [False] * channels_mult.__len__()
         self.channels_mult = list(reversed([1, *channels_mult]))
-        self.attn = list(reversed(attn))
         self.z_channels = z_channels if not z_double else z_channels * 2
         
         # architecture modules
