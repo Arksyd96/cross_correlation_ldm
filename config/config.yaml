@@ -1,0 +1,19 @@
+data:
+    orig_resolution: 240
+    orig_num_slices: 155
+    resolution: 128
+    num_slices: 64
+    in_channels: 2
+    out_channels: 2
+    n_samples: 500
+    modalities:
+    - flair
+    - t1ce
+    binarize: true
+    batch_size: 32
+    shuffle: true
+    num_workers: 4
+    npy_path: ./data/brats_3d_dataset.npy
+    root_path: '../common_data/RSNA_ASNR_MICCAI_BraTS2021_TrainingData_16July2021'
+    
+

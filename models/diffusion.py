@@ -37,22 +37,15 @@ class DiffusionModule(nn.Module):
         betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
         return torch.clip(betas, 0, 0.999)
     
-    def reverse_process(self, model, x_t, time, condition, fill_value=0.1):
-        context_mask = torch.bernoulli(torch.full(size=(condition.shape[0],), fill_value=fill_value)).to(device)    
-        condition = condition * context_mask[:, None, None, None]
-        return model(torch.cat([x_t, condition], dim=1), time)
+    def reverse_process(self, model, x_t, time):
+        return model(x_t, time)
     
     @torch.no_grad()
-    def sample(self, model, x_T, condition, w=0.5):
+    def sample(self, model, x_T):
         x_t = x_T
         for timestep in tqdm(range(self.T - 1, -1, -1), desc='Sampling', position=0, leave=True):
             times = torch.full(size=(x_T.shape[0],), fill_value=timestep, dtype=torch.long, device=x_t.device)
-
-            # predictions
-            guided_pred = self.reverse_process(model, x_t, times, condition, fill_value=1.)
-            free_pred = self.reverse_process(model, x_t, times, condition, fill_value=0.)
-            predicted = w * guided_pred + (1 - w) * free_pred
-
+            eps = self.reverse_process(model, x_t, times)
             beta_t = self.betas[timestep].to(x_t.device)
             alpha_t = self.alphas[timestep].to(x_t.device)
             alpha_hat_t = self.alphas_hat[timestep].to(x_t.device)
@@ -62,5 +55,5 @@ class DiffusionModule(nn.Module):
                 var = torch.sqrt(beta_t_hat) * torch.randn_like(x_t).to(x_t.device)
             else :
                 var = 0
-            x_t = alpha_t.rsqrt() * (x_t - beta_t / torch.sqrt((1 - alpha_hat_t_prev)) * predicted) + var
+            x_t = alpha_t.rsqrt() * (x_t - beta_t / torch.sqrt((1 - alpha_hat_t_prev)) * eps) + var
         return x_t

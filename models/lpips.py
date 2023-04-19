@@ -97,8 +97,13 @@ class NetLinLayer(nn.Module):
 
 
 class vgg16(torch.nn.Module):
-    def __init__(self, requires_grad=False, weights=models.VGG16_Weights.DEFAULT):
+    def __init__(self, requires_grad=False, weights=models.VGG16_Weights.DEFAULT, pretrained=True):
         super(vgg16, self).__init__()
+        if pretrained:
+            weights = models.VGG16_Weights.DEFAULT
+        else:
+            weights = None
+
         vgg_pretrained_features = models.vgg16(weights=weights).features
         
         # getting weights of input channel
@@ -177,7 +182,7 @@ def md5_hash(path):
 
 class VQLPIPSWithDiscriminator(nn.Module):
     def __init__(self, 
-            disc_start, codebook_weight=1., pixel_weight=1., perceptual_weight=1., disc_weight=1.,
+            disc_start, codebook_weight=1., pixel_weight=1., perceptual_weight=1., disc_weight=1., cos_weight=1.,
             d_input_channels=3, d_channels=64, d_num_layers=3, disc_factor=1.
         ) -> None:
         super().__init__()
@@ -186,6 +191,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
         self.perceptual_weight = perceptual_weight
         self.disc_weight = disc_weight
         self.disc_factor = disc_factor
+        self.cos_weight = cos_weight
         
         # modules
         self.lpips = LPIPS().eval()
@@ -205,7 +211,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
         d_weight = d_weight * self.disc_weight
         return d_weight
 
-    def forward(self, codebook_loss, x, recon_x, optimizer_idx, global_step, last_layer=None):
+    def forward(self, codebook_loss, x, recon_x, z_i, optimizer_idx, global_step, last_layer=None):
         rec_loss = F.l1_loss(recon_x, x, reduction='none')
         if self.perceptual_weight > 0:
             p_loss = self.lpips(x, recon_x)
@@ -213,28 +219,31 @@ class VQLPIPSWithDiscriminator(nn.Module):
 
         nll_loss = rec_loss.mean()
 
-        # discriminator loss
-        split = "train" if self.training else "val"
         if optimizer_idx == 0:
             logits_fake = self.discriminator(recon_x.contiguous())
             g_loss = -torch.mean(logits_fake)
+
+            B = x.shape[0]
+            z_a, z_b = z_i[0].detach().view(B, -1), z_i[1].detach().view(B, -1)
+            cos_sim = 1 - torch.cosine_similarity(z_a, z_b).mean()
 
             try:
                 d_weight = self.calculate_adaptive_weight(nll_loss, g_loss, last_layer)
             except RuntimeError:
                 d_weight = torch.tensor(0.0)
 
-            d_factor = self.disc_factor if global_step > self.disc_start else 0.0
-            loss = nll_loss + d_weight * d_factor * g_loss + self.codebook_weight * codebook_loss.mean()
+            d_factor = self.disc_factor if global_step > self.disc_start else 0.0 # only for the 11 first steps then 1.0
+            loss = nll_loss + d_weight * d_factor * g_loss + self.codebook_weight * codebook_loss.mean() + cos_sim * self.cos_weight
 
-            log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
-                   "{}/quant_loss".format(split): codebook_loss.detach().mean(),
-                   "{}/nll_loss".format(split): nll_loss.detach().mean(),
-                   "{}/rec_loss".format(split): rec_loss.detach().mean(),
-                   "{}/p_loss".format(split): p_loss.detach().mean(),
-                   "{}/d_weight".format(split): d_weight.detach(),
-                   "{}/disc_factor".format(split): torch.tensor(d_factor),
-                   "{}/g_loss".format(split): g_loss.detach().mean(),
+            log = {"total_loss": loss.clone().detach().mean(),
+                   "quant_loss": codebook_loss.detach().mean(),
+                   "nll_loss": nll_loss.detach().mean(),
+                   "rec_loss": rec_loss.detach().mean(),
+                   "p_loss": p_loss.detach().mean(),
+                   "d_weight": d_weight.detach(),
+                   "disc_factor": torch.tensor(d_factor),
+                   "g_loss": g_loss.detach().mean(),
+                   "cos_sim": cos_sim.detach().mean()
                    }
             return loss, log
         
@@ -245,9 +254,9 @@ class VQLPIPSWithDiscriminator(nn.Module):
             d_factor = self.disc_factor if global_step > self.disc_start else 0.0
             d_loss = d_factor * self.hinge_loss(logits_real, logits_fake)
 
-            log = {"{}/disc_loss".format(split): d_loss.clone().detach().mean(),
-                   "{}/logits_real".format(split): logits_real.detach().mean(),
-                   "{}/logits_fake".format(split): logits_fake.detach().mean()
+            log = {"disc_loss": d_loss.clone().detach().mean(),
+                   "logits_real": logits_real.detach().mean(),
+                   "logits_fake": logits_fake.detach().mean()
                    }
             return d_loss, log
 
