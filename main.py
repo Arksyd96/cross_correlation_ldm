@@ -8,6 +8,8 @@ from nibabel.processing import resample_to_output
 from nibabel import load
 from omegaconf import OmegaConf
 
+from models.vector_quantized_autoencoder import VQAutoencoder
+
 
 def get_parser(**parser_kwargs):
     pass
@@ -68,19 +70,19 @@ class BratsDataModule(pl.LightningDataModule):
 
         self.volumes = {}
         for _, m in enumerate(self.dc.modalities):
-            self.volumes[m] = data[:, _, None, :, :]
+            self.volumes[m] = torch.from_numpy(data[:, _, None, :, :])
 
         for _, m in enumerate(self.dc.modalities):
             for idx in range(self.dc.n_samples):
-                self.volumes[m][idx] = self.normalize(self.volumes[m][idx])
+                self.volumes[m][idx] = self.normalize(self.volumes[m][idx]).type(torch.float32)
 
         # switching to 2D
         for _, m in enumerate(self.dc.modalities):
-            self.volumes[m] = self.volumes[m].transpose(0, 4, 1, 2, 3)
+            self.volumes[m] = self.volumes[m].permute(0, 4, 1, 2, 3)
             self.volumes[m] = self.volumes[m].reshape(self.dc.n_samples * self.dc.num_slices, -1, self.dc.resolution, self.dc.resolution)
 
         # keeping track on slice positions for positional embedding
-        self.slice_positions = np.arange(self.dc.num_slices)[None, :].repeat(self.dc.n_samples, axis=0)
+        self.slice_positions = torch.arange(self.dc.num_slices)[None, :].repeat(self.dc.n_samples, 1)
         self.slice_positions = self.slice_positions.flatten()
 
         # removing empty slices
@@ -93,14 +95,14 @@ class BratsDataModule(pl.LightningDataModule):
 
     # normalizes data between -1 and 1
     def normalize(self, data):
-        return (data * 2 / data.max() - 1).astype(np.float32)
+        return data * 2 / data.max() - 1
         
     def setup(self, stage='fit'):
-        self.dataset = IdentityDataset(*[self.volumes.values] + [self.slice_positions])
+        self.dataset = IdentityDataset(*self.volumes.values(), self.slice_positions)
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
-            self.dataset, batch_size=self.dc.batch_size, shuffle=self.dc.shuffle, num_workers=self.dc.num_workers, pin_memory=True
+            self.dataset, batch_size=self.dc.batch_size, shuffle=self.dc.shuffle, num_workers=self.dc.num_workers, pin_memory=True,
         )
 
 class CheckpointCallback(pl.Callback):
@@ -121,9 +123,16 @@ class CheckpointCallback(pl.Callback):
 
 
 if __name__ == '__main__':
-    # parser = get_parser()
-    # args = parser.parse_args()
+    torch.set_float32_matmul_precision('high')
     cfg = './config/config.yaml'
     config = OmegaConf.load(cfg)
     data_module = BratsDataModule(config.data)
-    # ckpt_callback = CheckpointCallback(config.checkpointCallback)
+    autoencoder = VQAutoencoder(**config.models.autoencoder, **config.models.autoencoder.loss)
+    trainer = pl.Trainer(
+        accelerator='gpu',
+        fast_dev_run=10,
+        precision=16,
+        max_epochs=200,
+        log_every_n_steps=1
+    )
+    trainer.fit(model=autoencoder, datamodule=data_module)

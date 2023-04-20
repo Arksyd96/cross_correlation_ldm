@@ -136,6 +136,8 @@ class VQAutoencoder(pl.LightningModule):
         **kwargs
     ) -> None:
         super().__init__()
+        self.automatic_optimization = False
+
         if attn is not None:
             assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
             self.attn = attn
@@ -233,7 +235,7 @@ class VQAutoencoder(pl.LightningModule):
 
         modalities, position = batch[:-1], batch[-1]
         x = torch.cat(modalities, dim=1)
-        x_hat, z_i, qloss, indices = self.forward(x, position, return_indices=True)
+        x_hat, z_i, qloss, _ = self.forward(x, position, return_indices=True)
 
         ########################
         # Optimize Autoencoder #
@@ -314,7 +316,7 @@ class VQAutoencoder(pl.LightningModule):
 
     def save_log_to_txt(self, path):
         with open(path, 'w') as f:
-            self.logger.experiment.save_text('log', path)
+            self.logger.experiment.save_text('log', path) # à vérifier
 
 
 
