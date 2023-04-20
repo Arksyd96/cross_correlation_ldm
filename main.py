@@ -126,4 +126,5 @@ if __name__ == '__main__':
     cfg = './config/config.yaml'
     config = OmegaConf.load(cfg)
     data_module = BratsDataModule(config.data)
-    ckpt_callback = CheckpointCallback(config.checkpointCallback)
+    data_module.prepare_data()
+    # ckpt_callback = CheckpointCallback(config.checkpointCallback)

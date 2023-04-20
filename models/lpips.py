@@ -183,7 +183,7 @@ def md5_hash(path):
 class VQLPIPSWithDiscriminator(nn.Module):
     def __init__(self, 
             disc_start, codebook_weight=1., pixel_weight=1., perceptual_weight=1., disc_weight=1., cos_weight=1.,
-            d_input_channels=3, d_channels=64, d_num_layers=3, disc_factor=1.
+            disc_input_channels=3, disc_channels=64, disc_num_layers=3, disc_factor=1., **kwargs
         ) -> None:
         super().__init__()
         self.codebook_weight = codebook_weight
@@ -195,7 +195,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
         
         # modules
         self.lpips = LPIPS().eval()
-        self.discriminator = NLayerDiscriminator(d_input_channels, d_channels, d_num_layers, use_actnorm=False).apply(weights_init)
+        self.discriminator = NLayerDiscriminator(disc_input_channels, disc_channels, disc_num_layers, use_actnorm=False).apply(weights_init)
         self.disc_start = disc_start
 
     def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer=None):

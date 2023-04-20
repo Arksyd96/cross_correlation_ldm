@@ -7,6 +7,7 @@ from .modules import (
     ResidualBlock, SelfAttention
 )
 from .vector_quantizer import VectorQuantizer
+from .lpips import VQLPIPSWithDiscriminator
 
 class Encoder(nn.Module):
     def __init__(
@@ -107,11 +108,29 @@ class Decoder(nn.Module):
 
 class VQAutoencoder(nn.Module):
     def __init__(self,
-        in_channels, out_channels, n_embed, embed_dim,
-        z_channels=4, z_double=False, 
-        pemb_dim=128, T=64,
-        num_channels=128, channels_mult=[1, 2, 4, 4], 
-        num_res_blocks=2, attn=None
+        in_channels, 
+        out_channels, 
+        n_embed, 
+        embed_dim,
+        z_channels=4, 
+        z_double=False, 
+        pemb_dim=128, 
+        T=64,
+        num_channels=128, 
+        channels_mult=[1, 2, 4, 4], 
+        num_res_blocks=2, 
+        attn=None,
+        disc_start=11, 
+        codebook_weight=1., 
+        pixel_weight=1., 
+        perceptual_weight=1., 
+        disc_weight=1., 
+        cos_weight=1.,
+        disc_input_channels=3, 
+        disc_channels=64, 
+        disc_num_layers=3, 
+        disc_factor=1., 
+        **kwargs
     ) -> None:
         super().__init__()
         if attn is not None:
@@ -140,6 +159,12 @@ class VQAutoencoder(nn.Module):
         self.quantizer = VectorQuantizer(self.n_embed, vq_embed_dim, beta=0.25, remap=None)
         self.quant_conv = nn.Conv2d(decoder_in_channels, vq_embed_dim, kernel_size=1)
         self.post_quant_conv = nn.Conv2d(vq_embed_dim, decoder_in_channels, kernel_size=1)
+
+        # loss functions
+        self.loss = VQLPIPSWithDiscriminator(
+            disc_start, codebook_weight, pixel_weight, perceptual_weight, disc_weight, cos_weight,
+            disc_input_channels, disc_channels, disc_num_layers, disc_factor
+        )
 
         # TODO: Add EMA
 
@@ -185,3 +210,12 @@ class VQAutoencoder(nn.Module):
         if return_indices:
             return x, z_i, qloss, indices
         return x, z_i, qloss
+    
+    def checkpoint(self, path, epoch, optimizer, scheduler):
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': self.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict()
+        }, path)
+    

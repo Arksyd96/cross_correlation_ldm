@@ -20,5 +20,18 @@ CheckpointCallback:
     ckpt_path: ./checkpoints
     save_ckpt_at_every: 50
     save_log_at_every: 1
+models:
+    autoencoder:
+        loss:
+            disc_start: 11
+            codebook_weight: 1.0
+            pixel_weight: 1.0
+            perceptual_weight: 1.0
+            disc_weight: 1.0
+            cos_weight: 1.0
+            disc_input_channels: 2
+            disc_channels: 64
+            disc_num_layers: 3
+            disc_factor: 1.0
     
 
