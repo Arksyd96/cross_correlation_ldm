@@ -22,9 +22,26 @@ CheckpointCallback:
     save_log_at_every: 1
 models:
     unet:
+        in_channels: 4
+        out_channels: 4
         learning_rate: 0.00001
         T: 1000
-        resolution: 32
+        resolution: 256
+        num_channels: 128
+        channel_mult: 
+        - 1
+        - 2
+        - 2
+        - 4
+        temb_dim: 128
+        temb_dim_mult: 4
+        attn: 
+        - false
+        - false
+        - true
+        - false
+        num_res_blocks: 2
+        beta_schedule: cosine
     autoencoder:
         in_channels: 2
         out_channels: 2 

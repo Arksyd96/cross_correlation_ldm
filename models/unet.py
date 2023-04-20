@@ -9,6 +9,7 @@ from .modules import (
     TimePositionalEmbedding, 
     EncodingBlock, DecodingBlock
 )
+from .diffusion import DiffusionModule
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -18,41 +19,69 @@ class ResUNet(pl.LightningModule):
         out_channels, 
         T=1000,
         num_channels=128,
+        channel_mult=[1, 2, 2, 4],
         temb_dim=128,
         temb_dim_mult=4,
-        downsample=[True, True, True, True],
         attn=[False, False, True, False],
-        
+        num_res_blocks=2,
+        beta_schedule='cosine',
+        learning_rate=1e-5,
+        **kwargs
         ) -> None:
         super().__init__()
-        self.in_conv = nn.Conv2d(in_channels, num_channels, kernel_size=3, padding='same')
+        assert attn.__len__() == channel_mult.__len__(), 'attn must have the same length as channel_mult'
+        self.channel_mult = [1] + channel_mult
+        self.reverse_channel_mult = list(reversed(self.channel_mult + [self.channel_mult[-1]]))
+        self.temb_latent_dim = temb_dim * temb_dim_mult
+        self.learning_rate = learning_rate
+        self.T = T
+        
+        # diffuser
+        self.diffusion = DiffusionModule(T=self.T, beta_schedule=beta_schedule)
+        
+        # architecture modules
         self.positional_encoder = nn.Sequential(
             TimePositionalEmbedding(dimension=temb_dim, T=T, device=device),
-            nn.Linear(128, 128 * 4),
+            nn.Linear(temb_dim, self.temb_latent_dim),
             nn.GELU(),
-            nn.Linear(128 * 4, 128 * 4)
+            nn.Linear(self.temb_latent_dim, self.temb_latent_dim),
         )
-
+        
+        self.in_conv = nn.Conv2d(in_channels, num_channels, kernel_size=3, padding='same')
         self.encoder = nn.ModuleList([
-            EncodingBlock(in_channels=128, out_channels=128, temb_dim=128 * 4, downsample=True, attn=False, num_blocks=2, groups=32),
-            EncodingBlock(in_channels=128, out_channels=256, temb_dim=128 * 4, downsample=True, attn=False, num_blocks=2, groups=32),
-            EncodingBlock(in_channels=256, out_channels=256, temb_dim=128 * 4, downsample=True, attn=True, num_blocks=2, groups=32),
-            EncodingBlock(in_channels=256, out_channels=512, temb_dim=128 * 4, downsample=True, attn=False, num_blocks=2, groups=32)
+            EncodingBlock(
+                in_channels=num_channels * self.channel_mult[idx],
+                out_channels=num_channels * self.channel_mult[idx + 1],
+                temb_dim=self.temb_latent_dim,
+                downsample=True,
+                attn=attn[idx],
+                num_blocks=num_res_blocks
+            ) for idx in range(channel_mult.__len__() - 1)
         ])
-
-        self.bottleneck = EncodingBlock(in_channels=512, out_channels=512, temb_dim=128 * 4, downsample=False, attn=True, num_blocks=2, groups=32)
-
+        
+        self.bottleneck = EncodingBlock(
+            in_channels=num_channels * self.channel_mult[-1], 
+            out_channels=num_channels * self.channel_mult[-1], 
+            temb_dim=self.temb_latent_dim, 
+            downsample=False, 
+            attn=True, 
+            num_blocks=num_res_blocks
+        )
+        
         self.decoder = nn.ModuleList([
-            DecodingBlock(in_channels=512 + 512, out_channels=512, temb_dim=128 * 4, upsample=True, attn=False, num_blocks=2, groups=32),
-            DecodingBlock(in_channels=512 + 256, out_channels=256, temb_dim=128 * 4, upsample=True, attn=True, num_blocks=2, groups=32),
-            DecodingBlock(in_channels=256 + 256, out_channels=256, temb_dim=128 * 4, upsample=True, attn=False, num_blocks=2, groups=32),
-            DecodingBlock(in_channels=256 + 128, out_channels=128, temb_dim=128 * 4, upsample=True, attn=False, num_blocks=2, groups=32)
+            DecodingBlock(
+                in_channels=num_channels * self.channel_mult[idx] + num_channels * self.channel_mult[idx + 1],
+                out_channels=num_channels * self.channel_mult[idx + 1],
+                temb_dim=self.temb_latent_dim,
+                upsample=True,
+                attn=attn[0],
+            ) for idx in range(self.reverse_channel_mult.__len__() - 2)
         ])
-
+        
         self.out_conv = nn.Sequential(
-            nn.GroupNorm(num_groups=32, num_channels=256),
+            nn.GroupNorm(num_groups=32, num_channels=num_channels * 2),
             nn.SiLU(),
-            nn.Conv2d(in_channels=256, out_channels=out_channels, kernel_size=3, padding=1)
+            nn.Conv2d(in_channels=num_channels * 2, out_channels=out_channels, kernel_size=3, padding=1)
         )
 
     def forward(self, x, time):
@@ -79,7 +108,35 @@ class ResUNet(pl.LightningModule):
         assert len(skip_connections) == 0, 'Skip connections must be empty'
         return self.out_conv(x)
     
+    def training_step(self, batch, batch_idx):
+        z_q = batch.type(torch.float16)
+        B = z_q.shape[0]
+        
+        # forward step
+        times = torch.randint(low=0, high=self.T, size=(B,), device=device, dtype=torch.long)
+        x_t, noise = self.diffusion.forward_process(z_q, times)
+        x_t = x_t.to(device, dtype=torch.float16)
+        
+        # backward step
+        noise_hat = self.diffusion.reverse_process(self, x_t, times)
+        
+        # loss
+        loss = F.mse_loss(noise_hat, noise)
+        self.log('mse_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        
+        return loss
+    
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.learning_rate, betas=(0.5, 0.9))
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate, betas=(0.5, 0.9))
+        
+        scheduler = {
+            'scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=self.trainer.max_steps, eta_min=1e-9, last_epoch=-1
+            ),
+            'interval': 'step',
+            'frequency': 1
+        }
+        
+        return optimizer, scheduler
     
     

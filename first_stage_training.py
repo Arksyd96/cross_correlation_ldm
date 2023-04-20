@@ -10,7 +10,6 @@ from omegaconf import OmegaConf
 
 from models.vector_quantized_autoencoder import VQAutoencoder
 
-
 def get_parser(**parser_kwargs):
     pass
 

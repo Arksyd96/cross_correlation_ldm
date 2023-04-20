@@ -99,7 +99,7 @@ class SelfAttention(nn.Module):
         return self.norm(x + self.proj(attention))
     
 class EncodingBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, temb_dim=None, downsample=True, attn=False, num_blocks=2, groups=8) -> None:
+    def __init__(self, in_channels, out_channels, temb_dim=None, downsample=True, attn=False, num_blocks=2, groups=32) -> None:
         super().__init__()
 
         self.resnet = nn.ModuleList([
@@ -122,7 +122,7 @@ class EncodingBlock(nn.Module):
         return self.downsample(x)
     
 class DecodingBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, temb_dim=None, upsample=True, attn=False, num_blocks=2, groups=8) -> None:
+    def __init__(self, in_channels, out_channels, temb_dim=None, upsample=True, attn=False, num_blocks=2, groups=32) -> None:
         super().__init__()
         self.resnet = nn.ModuleList([
             ResidualBlock(in_channels if i == 0 else out_channels, out_channels, temb_dim=temb_dim, groups=groups)
