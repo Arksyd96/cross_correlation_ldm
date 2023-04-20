@@ -23,12 +23,13 @@ class IdentityDataset(torch.utils.data.Dataset):
         return [d[index] for d in self.data]
 
 class BratsDataModule(pl.LightningDataModule):
-    def __init__(self, dataconf: OmegaConf, **kwargs):
+    def __init__(self, dataConf: OmegaConf, **kwargs):
         super().__init__()
-        self.dc = dataconf
+        self.dc = dataConf
 
     def prepare_data(self) -> None:
         if not os.path.exists(self.dc.npy_path):
+            print('Loading dataset from NiFTI files...')
             placeholder = np.zeros(shape=(
                 self.dc.n_samples, self.dc.num_modalities, self.dc.resolution, self.dc.resolution
             ))
@@ -61,45 +62,62 @@ class BratsDataModule(pl.LightningDataModule):
             # saving the dataset as a npy file
             np.save(self.dc.npy_path, placeholder)
 
-    # normalizes data between -1 and 1
-    def normalize(self, data):
-        return (data * 2 / data.max() - 1).astype(np.float32)
-        
-    def setup(self, stage='fit'):
-        # loading dataset
-        data = np.load(self.dc.npy_path)
+        else:
+            print('Loading dataset from npy file...')
+            data = np.load(self.dc.npy_path)
 
-        volumes = {}
+        self.volumes = {}
         for _, m in enumerate(self.dc.modalities):
-            volumes[m] = data[:, _, None, :, :]
+            self.volumes[m] = data[:, _, None, :, :]
 
         for _, m in enumerate(self.dc.modalities):
             for idx in range(self.dc.n_samples):
-                volumes[m][idx] = self.normalize(volumes[m][idx])
-
-        # keeping track on slice positions for positional embedding
-        slice_positions = np.arange(self.dc.num_slices)[None, :].repeat(self.dc.n_samples, axis=0)
-        slice_positions = slice_positions.flatten()
+                self.volumes[m][idx] = self.normalize(self.volumes[m][idx])
 
         # switching to 2D
         for _, m in enumerate(self.dc.modalities):
-            volumes[m] = volumes[m].transpose(0, 4, 1, 2, 3)
-            volumes[m] = volumes[m].reshape(self.dc.n_samples * self.dc.num_slices, -1, self.dc.resolution, self.dc.resolution)
+            self.volumes[m] = self.volumes[m].transpose(0, 4, 1, 2, 3)
+            self.volumes[m] = self.volumes[m].reshape(self.dc.n_samples * self.dc.num_slices, -1, self.dc.resolution, self.dc.resolution)
+
+        # keeping track on slice positions for positional embedding
+        self.slice_positions = np.arange(self.dc.num_slices)[None, :].repeat(self.dc.n_samples, axis=0)
+        self.slice_positions = self.slice_positions.flatten()
 
         # removing empty slices
         # empty_slices_indices = np.where(np.any(flair, axis=(1, 2, 3)) == True)[0]
         # flair, t1ce, mask = flair[empty_slices_indices], t1ce[empty_slices_indices], mask[empty_slices_indices]
 
-        # dataset and dataloader
-        self.dataset = IdentityDataset(*[volumes.values] + [slice_positions])
-
         print('Modalities: ', self.dc.modalities)
-        print('Data shape: ', volumes[self.dc.modalities[0]].shape)
+        print('Data shape: ', self.volumes[self.dc.modalities[0]].shape)
+        print('Data prepared')
+
+    # normalizes data between -1 and 1
+    def normalize(self, data):
+        return (data * 2 / data.max() - 1).astype(np.float32)
+        
+    def setup(self, stage='fit'):
+        self.dataset = IdentityDataset(*[self.volumes.values] + [self.slice_positions])
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
             self.dataset, batch_size=self.dc.batch_size, shuffle=self.dc.shuffle, num_workers=self.dc.num_workers, pin_memory=True
         )
+
+class CheckpointCallback(pl.Callback):
+    def __init__(self, ckptConfig: OmegaConf, **kwargs):
+        self.cc = ckptConfig
+        self.epoch_counter = 0
+
+    def on_epoch_end(self, trainer, pl_module):
+        self.epoch_counter += 1
+        if self.epoch_counter % self.cc.save_ckpt_at_every == 0:
+            pl_module.checkpoint(
+                save_path=os.path.join(self.cc.save_path, f"epoch_{self.epoch_counter}.pth")
+            )
+        if self.epoch_counter % self.cc.save_log_at_every == 0:
+            pl_module.log(
+                save_path=os.path.join(self.cc.save_path, f"epoch_{self.epoch_counter}.pth")
+            )
 
 
 if __name__ == '__main__':
@@ -107,5 +125,5 @@ if __name__ == '__main__':
     # args = parser.parse_args()
     cfg = './config/config.yaml'
     config = OmegaConf.load(cfg)
-    dm = BratsDataModule(config.data)
-    dm.setup()
+    data_module = BratsDataModule(config.data)
+    ckpt_callback = CheckpointCallback(config.checkpointCallback)

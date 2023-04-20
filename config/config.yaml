@@ -15,5 +15,10 @@ data:
     num_workers: 4
     npy_path: ./data/brats_3d_dataset.npy
     root_path: '../common_data/RSNA_ASNR_MICCAI_BraTS2021_TrainingData_16July2021'
+CheckpointCallback:
+    log_path: ./logs
+    ckpt_path: ./checkpoints
+    save_ckpt_at_every: 50
+    save_log_at_every: 1
     
 
