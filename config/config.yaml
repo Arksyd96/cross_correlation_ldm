@@ -22,13 +22,30 @@ CheckpointCallback:
     save_log_at_every: 1
 models:
     autoencoder:
+        in_channels: 2
+        out_channels: 2 
+        n_embed: 8192
+        embed_dim: 1
+        z_channels: 4
+        z_double: false 
+        pemb_dim: 128
+        T: 64
+        num_channels: 128
+        channels_mult:
+        - 1
+        - 2
+        - 4
+        - 4 
+        num_res_blocks: 2
+        attn: None
+        learning_rate: 0.00001
         loss:
             disc_start: 11
             codebook_weight: 1.0
             pixel_weight: 1.0
             perceptual_weight: 1.0
             disc_weight: 1.0
-            cos_weight: 1.0
+            cos_weight: 0.0
             disc_input_channels: 2
             disc_channels: 64
             disc_num_layers: 3

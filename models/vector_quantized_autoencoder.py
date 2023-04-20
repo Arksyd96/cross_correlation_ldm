@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import pytorch_lightning as pl
 
 from .modules import (
     TimePositionalEmbedding, EncodingBlock, DecodingBlock,
@@ -106,7 +107,7 @@ class Decoder(nn.Module):
         x = self.out_conv(x)
         return x
 
-class VQAutoencoder(nn.Module):
+class VQAutoencoder(pl.LightningModule):
     def __init__(self,
         in_channels, 
         out_channels, 
@@ -120,6 +121,8 @@ class VQAutoencoder(nn.Module):
         channels_mult=[1, 2, 4, 4], 
         num_res_blocks=2, 
         attn=None,
+        learning_rate=1e-5,
+        lr_d_factor=1.,
         disc_start=11, 
         codebook_weight=1., 
         pixel_weight=1., 
@@ -142,6 +145,8 @@ class VQAutoencoder(nn.Module):
         self.embed_dim = embed_dim
         self.n_embed = n_embed
         self.z_channels = z_channels if not z_double else z_channels * 2
+        self.learning_rate = learning_rate
+        self.lr_d_factor = lr_d_factor
 
         # architecture modules
         self.positional_encoder = nn.Sequential(
@@ -203,6 +208,14 @@ class VQAutoencoder(nn.Module):
         x = self.decode(z_q, pemb)
         return x
     
+    def decode_pre_quantization(self, z, pemb):
+        z_q, qloss, info = self.quantizer(z)
+        x = self.decode(z_q, pemb)
+        return x, qloss, info
+    
+    def encode_position(self, position):
+        return self.positional_encoder(position)
+    
     def forward(self, x, position, return_indices=False):
         pemb = self.positional_encoder(position)
         z_q, z_i, qloss, (_, _, indices) = self.encode(x, pemb)
@@ -210,12 +223,100 @@ class VQAutoencoder(nn.Module):
         if return_indices:
             return x, z_i, qloss, indices
         return x, z_i, qloss
+
+    def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
+        pass # TODO: EMA
+
+    def training_step(self, batch, batch_idx):
+        # optimizers
+        ae_opt, disc_opt = self.optimizers()
+
+        modalities, position = batch[:-1], batch[-1]
+        x = torch.cat(modalities, dim=1)
+        x_hat, z_i, qloss, indices = self.forward(x, position, return_indices=True)
+
+        ########################
+        # Optimize Autoencoder #
+        ########################
+        ae_loss, ae_log = self.loss.autoencoder_loss(qloss, x, x_hat, z_i, self.global_step, last_layer=self.decoder.out_conv.weight)
+        ae_opt.zero_grad(set_to_none=True)
+        self.manual_backward(ae_loss)
+        ae_opt.step()
+
+        ##########################
+        # Optimize Discriminator #
+        ##########################
+        disc_loss, disc_log = self.loss.discriminator_loss(x, x_hat, self.global_step)
+        disc_opt.zero_grad(set_to_none=True)
+        self.manual_backward(disc_loss)
+        disc_opt.step()
+
+        # schedulers
+        ae_scheduler, disc_scheduler = self.lr_schedulers()
+        ae_scheduler.step()
+        disc_scheduler.step()
+
+        # log
+        ae_log = ae_log.update(disc_log)
+        self.log_dict(ae_log, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+
     
-    def checkpoint(self, path, epoch, optimizer, scheduler):
+    def configure_optimizers(self):
+        ae_opt = torch.optim.AdamW(list(self.encoders.parameters()) + 
+                                   list(self.decoder.parameters()) + 
+                                   list(self.positional_encoder.parameters()) +
+                                   list(self.quant_conv.parameters()) +
+                                   list(self.post_quant_conv.parameters()) +
+                                   list(self.quantizer.parameters()), 
+                                   lr=self.learning_rate, weight_decay=1e-6, betas=(0.5, 0.9))
+        disc_opt = torch.optim.AdamW(list(self.loss.discriminator.parameters()), 
+                                     lr=self.learning_rate * self.lr_d_factor, weight_decay=1e-6, betas=(0.5, 0.9))
+        
+        schedulers = [
+            {
+                'scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(
+                    ae_opt, T_max=self.trainer.max_steps, eta_min=1e-9, last_epoch=-1
+                ),
+                'interval': 'step',
+                'frequency': 1
+            },
+            {
+                'scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(
+                    disc_opt, T_max=self.trainer.max_steps, eta_min=1e-8, last_epoch=-1
+                ),
+                'interval': 'step',
+                'frequency': 1
+            }
+        ]
+
+        return [ae_opt, disc_opt], schedulers
+    
+    def save_checkpoint(self, path):
         torch.save({
-            'epoch': epoch,
             'model_state_dict': self.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict()
+            'discriminator_state_dict': self.loss.discriminator.state_dict(),
+            'optimizers_state_dict': [opt.state_dict() for opt in self.optimizers()],
+            'schedulers_state_dict': [sched.state_dict() for sched in self.lr_schedulers()],
+            'current_epoch': self.current_epoch
         }, path)
+        print('Checkpoint saved at {}'.format(path))
+
+    def load_checkpoint(self, path):
+        checkpoint = torch.load(path)
+        self.load_state_dict(checkpoint['model_state_dict'])
+        self.loss.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+        for i, opt in enumerate(self.optimizers()):
+            opt.load_state_dict(checkpoint['optimizers_state_dict'][i])
+        for i, sched in enumerate(self.lr_schedulers()):
+            sched.load_state_dict(checkpoint['schedulers_state_dict'][i])
+        self.current_epoch = checkpoint['current_epoch']
+        print('Checkpoint loaded from {}'.format(path))
+
+    def save_log_to_txt(self, path):
+        with open(path, 'w') as f:
+            self.logger.experiment.save_text('log', path)
+
+
+
+    
     
