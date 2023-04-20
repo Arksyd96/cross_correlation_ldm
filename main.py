@@ -130,8 +130,7 @@ if __name__ == '__main__':
     autoencoder = VQAutoencoder(**config.models.autoencoder, **config.models.autoencoder.loss)
     trainer = pl.Trainer(
         accelerator='gpu',
-        fast_dev_run=10,
-        precision=16,
+        precision='16-mixed',
         max_epochs=200,
         log_every_n_steps=1
     )

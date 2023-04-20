@@ -118,9 +118,9 @@ class VQAutoencoder(pl.LightningModule):
         pemb_dim=128, 
         T=64,
         num_channels=128, 
-        channels_mult=[1, 2, 4, 4], 
+        channels_mult=[1, 2, 4], 
         num_res_blocks=2, 
-        attn=None,
+        attn=[],
         learning_rate=1e-5,
         lr_d_factor=1.,
         disc_start=11, 
@@ -138,7 +138,7 @@ class VQAutoencoder(pl.LightningModule):
         super().__init__()
         self.automatic_optimization = False
 
-        if attn is not None:
+        if attn.__len__() > 0:
             assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
             self.attn = attn
         else:
@@ -234,13 +234,15 @@ class VQAutoencoder(pl.LightningModule):
         ae_opt, disc_opt = self.optimizers()
 
         modalities, position = batch[:-1], batch[-1]
-        x = torch.cat(modalities, dim=1)
+        x = torch.cat(modalities, dim=1).type(torch.float32)
+        position = position.type(torch.long)
+        
         x_hat, z_i, qloss, _ = self.forward(x, position, return_indices=True)
 
         ########################
         # Optimize Autoencoder #
         ########################
-        ae_loss, ae_log = self.loss.autoencoder_loss(qloss, x, x_hat, z_i, self.global_step, last_layer=self.decoder.out_conv.weight)
+        ae_loss, ae_log = self.loss.autoencoder_loss(qloss, x, x_hat, z_i, self.global_step, last_layer=self.decoder.out_conv[-1].weight)
         ae_opt.zero_grad(set_to_none=True)
         self.manual_backward(ae_loss)
         ae_opt.step()
@@ -258,9 +260,9 @@ class VQAutoencoder(pl.LightningModule):
         ae_scheduler.step()
         disc_scheduler.step()
 
-        # log
-        ae_log = ae_log.update(disc_log)
-        self.log_dict(ae_log, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        # logging
+        self.log_dict(ae_log, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log_dict(disc_log, on_step=True, on_epoch=True, prog_bar=False, logger=True)
 
     
     def configure_optimizers(self):

@@ -35,9 +35,8 @@ models:
         - 1
         - 2
         - 4
-        - 4 
         num_res_blocks: 2
-        attn: None
+        attn: []
         learning_rate: 0.00001
         loss:
             disc_start: 11

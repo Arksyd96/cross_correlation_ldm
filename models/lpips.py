@@ -232,6 +232,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
             disc_weight = self.calculate_adaptive_weight(rec_loss, g_loss, last_layer)
 
         # cos_sim loss
+        cos_sim = torch.tensor(0.0)
         if self.cos_weight > 0:
             B = x.shape[0]
             z_a, z_b = z_i[0].detach().view(B, -1), z_i[1].detach().view(B, -1)
