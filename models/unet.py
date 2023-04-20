@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
+import pytorch_lightning as pl
 
 from .modules import (
     TimePositionalEmbedding, 
@@ -11,12 +12,22 @@ from .modules import (
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class ResUNet(nn.Module):
-    def __init__(self, in_channels, out_channels, T=1000) -> None:
+class ResUNet(pl.LightningModule):
+    def __init__(self, 
+        in_channels, 
+        out_channels, 
+        T=1000,
+        num_channels=128,
+        temb_dim=128,
+        temb_dim_mult=4,
+        downsample=[True, True, True, True],
+        attn=[False, False, True, False],
+        
+        ) -> None:
         super().__init__()
-        self.in_conv = nn.Conv2d(in_channels, 128, kernel_size=3, padding='same')
+        self.in_conv = nn.Conv2d(in_channels, num_channels, kernel_size=3, padding='same')
         self.positional_encoder = nn.Sequential(
-            TimePositionalEmbedding(dimension=128, T=T, device='cuda'),
+            TimePositionalEmbedding(dimension=temb_dim, T=T, device=device),
             nn.Linear(128, 128 * 4),
             nn.GELU(),
             nn.Linear(128 * 4, 128 * 4)
@@ -67,3 +78,8 @@ class ResUNet(nn.Module):
         x = torch.cat([x, skip_connections.pop()], dim=1)
         assert len(skip_connections) == 0, 'Skip connections must be empty'
         return self.out_conv(x)
+    
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.learning_rate, betas=(0.5, 0.9))
+    
+    

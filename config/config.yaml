@@ -21,6 +21,10 @@ CheckpointCallback:
     save_ckpt_at_every: 50
     save_log_at_every: 1
 models:
+    unet:
+        learning_rate: 0.00001
+        T: 1000
+        resolution: 32
     autoencoder:
         in_channels: 2
         out_channels: 2 
