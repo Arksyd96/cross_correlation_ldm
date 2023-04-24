@@ -1,6 +1,6 @@
-"""
-    Adapted from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/losses/lpips.py
-"""
+#######################################################################################################################
+#    Adapted from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/losses/lpips.py           #
+#######################################################################################################################
 
 import torch
 import torch.nn as nn
@@ -97,7 +97,10 @@ class NetLinLayer(nn.Module):
 
 
 class vgg16(torch.nn.Module):
-    def __init__(self, requires_grad=False, weights=models.VGG16_Weights.DEFAULT, pretrained=True):
+    def __init__(self, 
+        requires_grad=False, 
+        weights=models.VGG16_Weights.DEFAULT, pretrained=True
+        ):
         super(vgg16, self).__init__()
         if pretrained:
             weights = models.VGG16_Weights.DEFAULT
@@ -182,8 +185,17 @@ def md5_hash(path):
 
 class VQLPIPSWithDiscriminator(nn.Module):
     def __init__(self, 
-            disc_start, codebook_weight=1., pixel_weight=1., perceptual_weight=1., disc_weight=1., cos_weight=1.,
-            disc_input_channels=3, disc_channels=64, disc_num_layers=3, disc_factor=1., **kwargs
+        disc_start, 
+        codebook_weight=1., 
+        pixel_weight=1., 
+        perceptual_weight=1., 
+        disc_weight=1., 
+        cos_weight=1.,
+        disc_input_channels=3, 
+        disc_channels=64, 
+        disc_num_layers=3, 
+        disc_factor=1., 
+        **kwargs
         ) -> None:
         super().__init__()
         self.codebook_weight = codebook_weight

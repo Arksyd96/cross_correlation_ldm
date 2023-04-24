@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
+from omegaconf import OmegaConf
 
 from .modules import (
     TimePositionalEmbedding, EncodingBlock, DecodingBlock,
@@ -123,21 +124,9 @@ class VQAutoencoder(pl.LightningModule):
         attn=[],
         learning_rate=1e-5,
         lr_d_factor=1.,
-        disc_start=11, 
-        codebook_weight=1., 
-        pixel_weight=1., 
-        perceptual_weight=1., 
-        disc_weight=1., 
-        cos_weight=1.,
-        disc_input_channels=3, 
-        disc_channels=64, 
-        disc_num_layers=3, 
-        disc_factor=1., 
         **kwargs
     ) -> None:
         super().__init__()
-        self.automatic_optimization = False
-
         if attn.__len__() > 0:
             assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
             self.attn = attn
@@ -168,12 +157,13 @@ class VQAutoencoder(pl.LightningModule):
         self.post_quant_conv = nn.Conv2d(vq_embed_dim, decoder_in_channels, kernel_size=1)
 
         # loss functions
-        self.loss = VQLPIPSWithDiscriminator(
-            disc_start, codebook_weight, pixel_weight, perceptual_weight, disc_weight, cos_weight,
-            disc_input_channels, disc_channels, disc_num_layers, disc_factor
-        )
+        self.loss = VQLPIPSWithDiscriminator(**kwargs['loss'])
 
         # TODO: Add EMA
+        
+        # pl
+        self.automatic_optimization = False
+        self.save_hyperparameters()
 
     def encode(self, x, pemb):
         z_i = []
@@ -315,10 +305,6 @@ class VQAutoencoder(pl.LightningModule):
             sched.load_state_dict(checkpoint['schedulers_state_dict'][i])
         self.current_epoch = checkpoint['current_epoch']
         print('Checkpoint loaded from {}'.format(path))
-
-    def save_log_to_txt(self, path):
-        with open(path, 'w') as f:
-            self.logger.experiment.save_text('log', path) # à vérifier
 
 
 

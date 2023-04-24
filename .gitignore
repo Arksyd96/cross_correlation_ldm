@@ -1,2 +1,7 @@
 data/
 weights/
+checkpoints/
+cross_correlation_ldm/
+lightning_logs/
+logs/
+wandb/

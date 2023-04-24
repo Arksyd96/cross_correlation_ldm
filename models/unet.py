@@ -56,7 +56,7 @@ class ResUNet(pl.LightningModule):
                 downsample=True,
                 attn=attn[idx],
                 num_blocks=num_res_blocks
-            ) for idx in range(channel_mult.__len__() - 1)
+            ) for idx in range(self.channel_mult.__len__() - 1)
         ])
         
         self.bottleneck = EncodingBlock(
@@ -70,11 +70,11 @@ class ResUNet(pl.LightningModule):
         
         self.decoder = nn.ModuleList([
             DecodingBlock(
-                in_channels=num_channels * self.channel_mult[idx] + num_channels * self.channel_mult[idx + 1],
-                out_channels=num_channels * self.channel_mult[idx + 1],
+                in_channels=num_channels * self.reverse_channel_mult[idx] + num_channels * self.reverse_channel_mult[idx + 1],
+                out_channels=num_channels * self.reverse_channel_mult[idx + 1],
                 temb_dim=self.temb_latent_dim,
                 upsample=True,
-                attn=attn[0],
+                attn=attn[-idx - 1],
             ) for idx in range(self.reverse_channel_mult.__len__() - 2)
         ])
         
@@ -83,6 +83,9 @@ class ResUNet(pl.LightningModule):
             nn.SiLU(),
             nn.Conv2d(in_channels=num_channels * 2, out_channels=out_channels, kernel_size=3, padding=1)
         )
+        
+        # pl
+        self.save_hyperparameters()
 
     def forward(self, x, time):
         assert x.shape[0] == time.shape[0], 'Batch size of x and time must be the same'
@@ -109,7 +112,7 @@ class ResUNet(pl.LightningModule):
         return self.out_conv(x)
     
     def training_step(self, batch, batch_idx):
-        z_q = batch.type(torch.float16)
+        z_q = batch[0].type(torch.float16)
         B = z_q.shape[0]
         
         # forward step
@@ -137,6 +140,7 @@ class ResUNet(pl.LightningModule):
             'frequency': 1
         }
         
-        return optimizer, scheduler
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}
+    
     
     

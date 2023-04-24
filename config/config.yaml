@@ -1,32 +1,28 @@
 data:
-    orig_resolution: 240
+    orig_data_resolution: 240
     orig_num_slices: 155
     resolution: 128
     num_slices: 64
-    in_channels: 2
-    out_channels: 2
     n_samples: 500
     modalities:
     - flair
     - t1ce
     binarize: true
-    batch_size: 32
-    shuffle: true
-    num_workers: 4
     npy_path: ./data/brats_3d_dataset.npy
     root_path: '../common_data/RSNA_ASNR_MICCAI_BraTS2021_TrainingData_16July2021'
-CheckpointCallback:
-    log_path: ./logs
-    ckpt_path: ./checkpoints
-    save_ckpt_at_every: 50
-    save_log_at_every: 1
+callbacks:
+    checkpoint:
+        log_path: ./logs
+        ckpt_path: ./checkpoints
+        save_ckpt_at_every: 50
+        save_log_at_every: 1
 models:
     unet:
-        in_channels: 4
-        out_channels: 4
+        in_channels: 8
+        out_channels: 8
         learning_rate: 0.00001
         T: 1000
-        resolution: 256
+        resolution: 128
         num_channels: 128
         channel_mult: 
         - 1
@@ -46,7 +42,7 @@ models:
         in_channels: 2
         out_channels: 2 
         n_embed: 8192
-        embed_dim: 1
+        embed_dim: 2
         z_channels: 4
         z_double: false 
         pemb_dim: 128
