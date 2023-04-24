@@ -223,11 +223,10 @@ class VQAutoencoder(pl.LightningModule):
         # optimizers
         ae_opt, disc_opt = self.optimizers()
 
-        modalities, position = batch[:-1], batch[-1]
-        x = torch.cat(modalities, dim=1).type(torch.float32)
-        position = position.type(torch.long)
+        x, pos = batch
+        x, pos = x.type(torch.float16), pos.type(torch.long)
         
-        x_hat, z_i, qloss, _ = self.forward(x, position, return_indices=True)
+        x_hat, z_i, qloss, _ = self.forward(x, pos, return_indices=True)
 
         ########################
         # Optimize Autoencoder #
@@ -285,26 +284,6 @@ class VQAutoencoder(pl.LightningModule):
 
         return [ae_opt, disc_opt], schedulers
     
-    def save_checkpoint(self, path):
-        torch.save({
-            'model_state_dict': self.state_dict(),
-            'discriminator_state_dict': self.loss.discriminator.state_dict(),
-            'optimizers_state_dict': [opt.state_dict() for opt in self.optimizers()],
-            'schedulers_state_dict': [sched.state_dict() for sched in self.lr_schedulers()],
-            'current_epoch': self.current_epoch
-        }, path)
-        print('Checkpoint saved at {}'.format(path))
-
-    def load_checkpoint(self, path):
-        checkpoint = torch.load(path)
-        self.load_state_dict(checkpoint['model_state_dict'])
-        self.loss.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
-        for i, opt in enumerate(self.optimizers()):
-            opt.load_state_dict(checkpoint['optimizers_state_dict'][i])
-        for i, sched in enumerate(self.lr_schedulers()):
-            sched.load_state_dict(checkpoint['schedulers_state_dict'][i])
-        self.current_epoch = checkpoint['current_epoch']
-        print('Checkpoint loaded from {}'.format(path))
 
 
 

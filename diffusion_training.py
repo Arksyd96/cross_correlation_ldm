@@ -19,7 +19,7 @@ class IdentityDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         return [d[index] for d in self.data]
 
-class DiffusionDataModule(pl.LightningDataModule):
+class DataModule(pl.LightningDataModule):
     def __init__(self, 
         npy_path,
         autoencoder,
@@ -88,33 +88,6 @@ class DiffusionDataModule(pl.LightningDataModule):
             pin_memory=True,
             drop_last=True
         )
-        
-class CheckpointCallback(pl.Callback):
-    def __init__(self, 
-        log_path,
-        ckpt_path,
-        save_ckpt_at_every,
-        save_log_at_every,
-        **kwargs
-        ):
-        self.epoch_counter = 0
-        self.log_path = log_path
-        self.ckpt_path = ckpt_path
-        self.save_ckpt_at_every = save_ckpt_at_every
-        self.save_log_at_every = save_log_at_every
-        
-        if not os.path.exists(self.log_path):
-            os.makedirs(self.log_path)
-            
-        if not os.path.exists(self.ckpt_path):
-            os.makedirs(self.ckpt_path)
-
-    def on_epoch_end(self, trainer, pl_module):
-        self.epoch_counter += 1
-        if self.epoch_counter % self.save_ckpt_at_every == 0:
-            pl_module.checkpoint(
-                save_path=os.path.join(self.ckpt_path, f"epoch_{self.epoch_counter}.pth")
-            )
     
 def global_seed(seed):
     np.random.seed(seed)
@@ -144,9 +117,8 @@ if __name__ == "__main__":
     )
     
     autoencoder = VQAutoencoder(**config.models.autoencoder)
-    datamodule = DiffusionDataModule(**config.data, autoencoder=autoencoder, batch_size=8)
+    datamodule = DataModule(**config.data, autoencoder=autoencoder, batch_size=8)
     unet = ResUNet(**config.models.unet)
-    ckpt_callback = CheckpointCallback(**config.callbacks.checkpoint)
     
     trainer = pl.Trainer(
         logger=wandb_logger,
@@ -155,7 +127,7 @@ if __name__ == "__main__":
         max_epochs=1000,
         log_every_n_steps=1,
         enable_progress_bar=True,
-        callbacks=[ckpt_callback]
+        # callbacks=[ckpt_callback]
     )
     trainer.fit(unet, datamodule)
 
