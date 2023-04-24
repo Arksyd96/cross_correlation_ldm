@@ -3,8 +3,8 @@ import os
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import wandb
-from tqdm import tqdm
+import wandb
+from pytorch_lightning.loggers import wandb as wandb_logger
 from nibabel.processing import resample_to_output
 from nibabel import load
 from omegaconf import OmegaConf
@@ -22,31 +22,35 @@ def global_seed(seed):
     torch.backends.cudnn.benchmark = True
 
 class SampleImageCallback(pl.Callback):
-    def __init__(self, 
+    def __init__(self,
+        modalities=['t1', 't1ce', 't2', 'flair'], 
         n_samples=5,
         **kwargs
         ):
         super().__init__()
-        self.n_samples = n_samples  if n_samples < trainer.train_dataloader.batch_size \
-                                    else trainer.train_dataloader.batch_size
+        self.n_samples = n_samples
+        self.modalities = modalities
 
     def on_train_epoch_end(self, trainer, pl_module):
         # sample images
         pl_module.eval()
         with torch.no_grad():
             x, pos = next(iter(trainer.train_dataloader))
-            x, pos = x.to(pl_module.device, torch.float16), pos.to(pl_module.device, torch.long)
+            x, pos = x.to(pl_module.device, torch.float32), pos.to(pl_module.device, torch.long)
 
             x, pos = x[:self.n_samples], pos[:self.n_samples]
-            x_hat = pl_module(x, pos)
+            x_hat, _, _ = pl_module(x, pos)
 
-            x_hat = x_hat.cpu().detach().numpy()
-            x = x.cpu().detach().numpy()
-
-            for idx, m in enumerate(pl_module.hparams.modalities):
-                img = torch.cat([x[:, idx, ...].reshape(128, -1), x_hat[:, idx, ...].reshape(128, -1)], dim=0)
-                pl_module.log({
-                    'Reconstruction examples': wandb.Image(img, caption='{} - {}'.format(m, trainer.current_epoch))
+            for idx, m in enumerate(self.modalities):
+                img = torch.cat([
+                    torch.hstack([img for img in x[:, idx, ...]]),
+                    torch.hstack([img for img in x_hat[:, idx, ...]]),
+                ], dim=0)
+                wandb.log({
+                    'Reconstruction examples': wandb.Image(
+                        img.detach().cpu().numpy(), 
+                        caption='{} - {} (Top are originals)'.format(m, trainer.current_epoch)
+                    )
                 })
 
 if __name__ == '__main__':
@@ -61,13 +65,13 @@ if __name__ == '__main__':
     config = OmegaConf.load(CONFIG_PATH)
 
     # logger
-    wandb_logger = wandb.WandbLogger(
+    logger = wandb_logger.WandbLogger(
         project='cross_correlation_ldm', 
         name='autoencoding'
     )
 
     data_module = DataModule(
-        **config.data, 
+        **config.data,
         autoencoder=None,
         use_2d_slices=True, 
         batch_size=32, 
@@ -83,15 +87,16 @@ if __name__ == '__main__':
         filename='autoencoder-{epoch:02d}',
         save_top_k=1,
         mode='min',
-        every_n_epochs=1
+        every_n_epochs=10
     )
 
-    image_callback = SampleImageCallback(n_samples=5)
+    image_callback = SampleImageCallback(n_samples=5, modalities=['FLAIR', 'T1CE'])
+
 
 
     # training
     trainer = pl.Trainer(
-        logger=wandb_logger,
+        logger=logger,
         accelerator='gpu',
         precision='16-mixed',
         max_epochs=200,

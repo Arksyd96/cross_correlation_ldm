@@ -220,8 +220,9 @@ class VQAutoencoder(pl.LightningModule):
         pass # TODO: EMA
 
     def training_step(self, batch, batch_idx):
-        # optimizers
+        # optimizers & schedulers
         ae_opt, disc_opt = self.optimizers()
+        ae_scheduler, disc_scheduler = self.lr_schedulers()
 
         x, pos = batch
         x, pos = x.type(torch.float16), pos.type(torch.long)
@@ -235,6 +236,7 @@ class VQAutoencoder(pl.LightningModule):
         ae_opt.zero_grad(set_to_none=True)
         self.manual_backward(ae_loss)
         ae_opt.step()
+        ae_scheduler.step()
 
         ##########################
         # Optimize Discriminator #
@@ -243,10 +245,6 @@ class VQAutoencoder(pl.LightningModule):
         disc_opt.zero_grad(set_to_none=True)
         self.manual_backward(disc_loss)
         disc_opt.step()
-
-        # schedulers
-        ae_scheduler, disc_scheduler = self.lr_schedulers()
-        ae_scheduler.step()
         disc_scheduler.step()
 
         # logging
