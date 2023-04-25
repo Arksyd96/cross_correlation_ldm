@@ -127,6 +127,7 @@ if __name__ == "__main__":
         max_epochs=1000,
         log_every_n_steps=1,
         enable_progress_bar=True,
+        accumulate_grad_batches=2,
         # callbacks=[ckpt_callback]
     )
     trainer.fit(unet, datamodule)

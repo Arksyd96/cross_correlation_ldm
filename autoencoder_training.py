@@ -3,6 +3,7 @@ import os
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
 import wandb
 from pytorch_lightning.loggers import wandb as wandb_logger
 from nibabel.processing import resample_to_output
@@ -11,6 +12,7 @@ from omegaconf import OmegaConf
 import matplotlib.pyplot as plt
 
 from models.vector_quantized_autoencoder import VQAutoencoder
+from models.gaussian_autoencoder import GaussianAutoencoder
 from models.data_module import DataModule
 
 def global_seed(seed):
@@ -21,7 +23,7 @@ def global_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
-class SampleImageCallback(pl.Callback):
+class ImageLogger(pl.Callback):
     def __init__(self,
         modalities=['t1', 't1ce', 't2', 'flair'], 
         n_samples=5,
@@ -70,6 +72,7 @@ if __name__ == '__main__':
         name='autoencoding'
     )
 
+    # data module
     data_module = DataModule(
         **config.data,
         autoencoder=None,
@@ -79,20 +82,20 @@ if __name__ == '__main__':
         num_workers=8
     )
 
-    autoencoder = VQAutoencoder(**config.models.autoencoder, **config.models.autoencoder.loss)
-
-    checkpoint_callback = pl.callbacks.ModelCheckpoint(
-        monitor=None,
-        dirpath='./checkpoints',
-        filename='autoencoder-{epoch:02d}',
-        save_top_k=1,
-        mode='min',
-        every_n_epochs=10
+    # autoencoder
+    if config.models.autoencoder.target == 'VQAutoencoder':
+        autoencoder = VQAutoencoder(**config.models.autoencoder, **config.models.autoencoder.loss)
+    elif config.models.autoencoder.target == 'GaussianAutoencoder':
+        autoencoder = GaussianAutoencoder(**config.models.autoencoder, **config.models.autoencoder.loss)
+    else:
+        raise ValueError('Unknown autoencoder target')
+    
+    # callbacks
+    checkpoint_callback = ModelCheckpoint(
+        **config.callbacks.checkpoint,
+        filename='{}-{}'.format(config.models.autoencoder.target, '{epoch:02d}')
     )
-
-    image_callback = SampleImageCallback(n_samples=5, modalities=['FLAIR', 'T1CE'])
-
-
+    image_logger = ImageLogger(n_samples=5, modalities=['FLAIR', 'T1CE'])
 
     # training
     trainer = pl.Trainer(
@@ -102,7 +105,8 @@ if __name__ == '__main__':
         max_epochs=200,
         log_every_n_steps=1,
         enable_progress_bar=True,
-        callbacks=[checkpoint_callback, image_callback]
+        accumulate_grad_batches=2,
+        callbacks=[checkpoint_callback, image_logger]
     )
 
     trainer.fit(model=autoencoder, datamodule=data_module)

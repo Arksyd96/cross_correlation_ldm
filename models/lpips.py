@@ -271,7 +271,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
         logits_fake = self.discriminator(recon_x.contiguous().detach())
 
         disc_factor = self.disc_factor if global_step > self.disc_start else 0.0
-        d_loss = disc_factor * self.hinge_loss(logits_real, logits_fake)
+        d_loss = disc_factor * hinge_loss(logits_real, logits_fake)
 
         log = {
             "d_loss": d_loss.clone().detach().mean(),
@@ -288,7 +288,124 @@ class VQLPIPSWithDiscriminator(nn.Module):
             loss, log = self.discriminator_loss(x, recon_x, global_step)
         return loss, log
 
-    def hinge_loss(self, logits_real, logits_fake):
-        loss = 0.5 * (torch.mean(F.relu(1.0 - logits_real)) + torch.mean(F.relu(1.0 + logits_fake)))
-        return loss
+
+class LPIPSWithDiscriminator(nn.Module):
+    def __init__(self, 
+        disc_start, 
+        logvar_init=0.,
+        kl_weight=1.,
+        pixel_weight=1., 
+        perceptual_weight=1., 
+        disc_weight=1., 
+        cos_weight=1.,
+        disc_input_channels=3, 
+        disc_channels=64, 
+        disc_num_layers=3, 
+        disc_factor=1., 
+        **kwargs
+        ) -> None:
+        super().__init__()
+        self.pixel_weight = pixel_weight
+        self.perceptual_weight = perceptual_weight
+        self.disc_weight = disc_weight
+        self.cos_weight = cos_weight
+        self.disc_factor = disc_factor
+        self.kl_weight = kl_weight
+        self.disc_start = disc_start
+        self.logvar = nn.Parameter(torch.ones(1) * logvar_init)
         
+        # modules
+        self.lpips = LPIPS().eval()
+        self.discriminator = NLayerDiscriminator(disc_input_channels, disc_channels, disc_num_layers, use_actnorm=False).apply(weights_init)
+
+    def calculate_adaptive_weight(self, rec_loss, g_loss, last_layer=None):
+        if last_layer is not None:
+            nll_grads = torch.autograd.grad(rec_loss, last_layer, retain_graph=True)[0]
+            g_grads = torch.autograd.grad(g_loss, last_layer, retain_graph=True)[0]
+        else:
+            nll_grads = torch.autograd.grad(rec_loss, self.last_layer[0], retain_graph=True)[0]
+            g_grads = torch.autograd.grad(g_loss, self.last_layer[0], retain_graph=True)[0]
+
+        disc_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-4)
+        disc_weight = torch.clamp(disc_weight, 0.0, 1e4).detach()
+        disc_weight = disc_weight * self.disc_weight
+        return disc_weight
+    
+    def autoencoder_loss(self, x, recon_x, z_i, posteriors, global_step, last_layer=None, weights=None):
+        # l1_loss
+        l1_loss = F.l1_loss(recon_x, x, reduction='none') * self.pixel_weight
+
+        # perceptual loss
+        if self.perceptual_weight > 0:
+            p_loss = self.lpips(x, recon_x)
+            rec_loss = l1_loss + p_loss * self.perceptual_weight
+
+        # rec_loss = rec_loss.mean()
+        nll_loss = rec_loss / torch.exp(self.logvar) + self.logvar
+        weighted_nll_loss = nll_loss
+        if weights is not None:
+            weighted_nll_loss = nll_loss * weights
+
+        weighted_nll_loss = torch.sum(weighted_nll_loss) / weighted_nll_loss.shape[0]
+        nll_loss = torch.sum(nll_loss) / nll_loss.shape[0]
+        kl_loss = posteriors.kl()
+        kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
+
+        # discriminator loss
+        logits_fake = self.discriminator(recon_x.contiguous())
+        g_loss = -torch.mean(logits_fake)
+
+        disc_weight = torch.tensor(0.0)
+        if global_step > self.disc_start:
+            disc_weight = self.calculate_adaptive_weight(rec_loss, g_loss, last_layer)
+
+        # cos_sim loss
+        cos_sim = torch.tensor(0.0)
+        if self.cos_weight > 0:
+            B = x.shape[0]
+            z_a, z_b = z_i[0].detach().view(B, -1), z_i[1].detach().view(B, -1)
+            cos_sim = 1 - torch.cosine_similarity(z_a, z_b, dim=1).mean()
+            
+        # compute total loss
+        loss = weighted_nll_loss + self.kl_weight + kl_loss + g_loss * disc_weight + cos_sim * self.cos_weight
+
+        log = {
+                "total_loss": loss.clone().detach().mean(),
+                "kl_loss": kl_loss.detach().mean(),
+                "l1_loss": l1_loss.detach().mean(),
+                "p_loss": p_loss.detach().mean(),
+                "rec_loss": rec_loss.detach().mean(), # L1 + p_loss
+                "nll_loss": nll_loss.detach().mean(),
+                "logvar": self.logvar.detach().mean(),
+                "disc_weight": disc_weight.detach(),
+                "g_loss": g_loss.detach().mean(),
+                "cos_sim": cos_sim.detach().mean()
+            }
+        
+        return loss, log
+    
+    def discriminator_loss(self, x, recon_x, global_step):
+        logits_real = self.discriminator(x.contiguous().detach())
+        logits_fake = self.discriminator(recon_x.contiguous().detach())
+
+        disc_factor = self.disc_factor if global_step > self.disc_start else 0.0
+        d_loss = disc_factor * hinge_loss(logits_real, logits_fake)
+
+        log = {
+            "d_loss": d_loss.clone().detach().mean(),
+            "logits_real": logits_real.detach().mean(),
+            "logits_fake": logits_fake.detach().mean()
+        }
+        
+        return d_loss, log
+        
+    def forward(self, codebook_loss, x, recon_x, z_i, optimizer_idx, global_step, last_layer=None):
+        if optimizer_idx == 0:
+            loss, log = self.autoencoder_loss(codebook_loss, x, recon_x, z_i, global_step, last_layer)
+        elif optimizer_idx == 1:
+            loss, log = self.discriminator_loss(x, recon_x, global_step)
+        return loss, log
+
+def hinge_loss(logits_real, logits_fake):
+    loss = 0.5 * (torch.mean(F.relu(1.0 - logits_real)) + torch.mean(F.relu(1.0 + logits_fake)))
+    return loss

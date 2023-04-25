@@ -2,18 +2,18 @@ import numpy as np
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from omegaconf import OmegaConf
 
 from .modules import (
     TimePositionalEmbedding, EncodingBlock, DecodingBlock,
     ResidualBlock, SelfAttention
 )
+
 from .vector_quantizer import VectorQuantizer
 from .lpips import VQLPIPSWithDiscriminator
 
 class Encoder(nn.Module):
     def __init__(
-        self, in_channels, z_channels=4, z_double=True, pemb_dim=None, num_channels=128, channels_mult=[1, 2, 4, 4], 
+        self, in_channels, z_channels=4, pemb_dim=None, num_channels=128, channels_mult=[1, 2, 4, 4], 
         num_res_blocks=2, attn=None
         ) -> None:
         super().__init__()
@@ -23,7 +23,7 @@ class Encoder(nn.Module):
         else:
             self.attn = [False] * channels_mult.__len__()
 
-        self.z_channels = z_channels if not z_double else z_channels * 2
+        self.z_channels = z_channels
         self.channels_mult = [1, *channels_mult]
         self.attn = attn
         
@@ -40,6 +40,7 @@ class Encoder(nn.Module):
             ) for idx in range(self.channels_mult.__len__() - 1)
         ])
         bottleneck_channels = num_channels * self.channels_mult[-1]
+        seeneck_channels = num_channels * self.channels_mult[-1]
         self.bottleneck_res_a = ResidualBlock(in_channels=bottleneck_channels, out_channels=bottleneck_channels, temb_dim=pemb_dim, groups=8)
         self.bottleneck_sa = SelfAttention(in_channels=bottleneck_channels, num_heads=8, head_dim=32, groups=8)
         self.bottleneck_res_b = ResidualBlock(in_channels=bottleneck_channels, out_channels=bottleneck_channels, temb_dim=pemb_dim, groups=8)
@@ -61,7 +62,7 @@ class Encoder(nn.Module):
     
 class Decoder(nn.Module):
     def __init__(
-        self, out_channels, z_channels, z_double=True, pemb_dim=None, num_channels=128, channels_mult=[1, 2, 4, 4],
+        self, out_channels, z_channels, pemb_dim=None, num_channels=128, channels_mult=[1, 2, 4, 4],
         num_res_blocks=2, attn=None
         ) -> None:
         super().__init__()
@@ -72,7 +73,7 @@ class Decoder(nn.Module):
             self.attn = [False] * channels_mult.__len__()
 
         self.channels_mult = list(reversed([1, *channels_mult]))
-        self.z_channels = z_channels if not z_double else z_channels * 2
+        self.z_channels = z_channels
         
         # architecture modules
         bottleneck_channels = num_channels * self.channels_mult[0]
@@ -147,11 +148,11 @@ class VQAutoencoder(pl.LightningModule):
             nn.Linear(128 * 4, pemb_dim)
         )
         self.encoders = nn.ModuleList([
-            Encoder(1, z_channels, z_double, pemb_dim, num_channels, channels_mult, num_res_blocks, self.attn) for _ in range(in_channels)
+            Encoder(1, z_channels, pemb_dim, num_channels, channels_mult, num_res_blocks, self.attn) for _ in range(in_channels)
         ])
         decoder_in_channels = in_channels * z_channels
         vq_embed_dim = self.embed_dim * in_channels
-        self.decoder = Decoder(out_channels, decoder_in_channels, z_double, pemb_dim, num_channels, channels_mult, num_res_blocks, self.attn)
+        self.decoder = Decoder(out_channels, decoder_in_channels, pemb_dim, num_channels, channels_mult, num_res_blocks, self.attn)
         self.quantizer = VectorQuantizer(self.n_embed, vq_embed_dim, beta=0.25, remap=None)
         self.quant_conv = nn.Conv2d(decoder_in_channels, vq_embed_dim, kernel_size=1)
         self.post_quant_conv = nn.Conv2d(vq_embed_dim, decoder_in_channels, kernel_size=1)
@@ -161,7 +162,7 @@ class VQAutoencoder(pl.LightningModule):
 
         # TODO: Add EMA
         
-        # pl
+        # pytorch lightining states
         self.automatic_optimization = False
         self.save_hyperparameters()
 
@@ -198,12 +199,12 @@ class VQAutoencoder(pl.LightningModule):
     def decode_code(self, code_b, pemb):
         z_q = self.quantizer.embedding(code_b)
         x = self.decode(z_q, pemb)
-        return x
+        return torch.tanh(x)
     
     def decode_pre_quantization(self, z, pemb):
         z_q, qloss, info = self.quantizer(z)
         x = self.decode(z_q, pemb)
-        return x, qloss, info
+        return torch.tanh(x), qloss, info
     
     def encode_position(self, position):
         return self.positional_encoder(position)
@@ -213,8 +214,8 @@ class VQAutoencoder(pl.LightningModule):
         z_q, z_i, qloss, (_, _, indices) = self.encode(x, pemb)
         x = self.decode(z_q, pemb)
         if return_indices:
-            return x, z_i, qloss, indices
-        return x, z_i, qloss
+            return torch.tanh(x), z_i, qloss, indices
+        return torch.tanh(x), z_i, qloss
 
     def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
         pass # TODO: EMA
