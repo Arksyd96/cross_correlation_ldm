@@ -3,92 +3,18 @@ import torch
 import os
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import wandb
+from pytorch_lightning.callbacks import ModelCheckpoint
 from omegaconf import OmegaConf
 from tqdm import tqdm
+import sys
 
 from models.unet import ResUNet
 from models.vector_quantized_autoencoder import VQAutoencoder
+from models.gaussian_autoencoder import GaussianAutoencoder
+from models.data_module import DataModule
 
-class IdentityDataset(torch.utils.data.Dataset):
-    def __init__(self, *data):
-        self.data = data
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    def __len__(self):
-        return self.data[-1].__len__()
-
-    def __getitem__(self, index):
-        return [d[index] for d in self.data]
-
-class DataModule(pl.LightningDataModule):
-    def __init__(self, 
-        npy_path,
-        autoencoder,
-        n_samples=500,
-        resolution=128,
-        modalities=['t1', 't1ce', 't2', 'flair'],
-        batch_size=32,
-        shuffle=True,
-        num_workers=4,
-        **kwargs
-        ):
-        super().__init__()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.autoencoder = autoencoder.to(self.device)
-        
-        # pl
-        self.save_hyperparameters(ignore=['autoencoder'])
-
-    def prepare_data(self):
-        print('Loading dataset from npy file... and encoding to latents')
-        data = np.load(self.hparams.npy_path)
-
-        self.volumes = {}
-        for _, m in enumerate(self.hparams.modalities):
-            self.volumes[m] = torch.from_numpy(data[:, _, None, :, :])
-
-        for _, m in enumerate(self.hparams.modalities):
-            for idx in range(self.hparams.n_samples):
-                self.volumes[m][idx] = self.normalize(self.volumes[m][idx]).type(torch.float32)
-
-        # switching to 2D
-        for _, m in enumerate(self.hparams.modalities):
-            self.volumes[m] = self.volumes[m].permute(0, 4, 1, 2, 3)
-
-        # encoding each slice
-        z_latents = []
-        self.autoencoder.eval()
-        for idx in tqdm(range(self.hparams.n_samples), position=0, leave=True):
-            input = torch.cat([self.volumes[m][idx] for m in self.hparams.modalities], dim=1).to(self.device, dtype=torch.float32)
-            with torch.no_grad():
-                pos = torch.arange(0, 64, device=self.device, dtype=torch.long)
-                pemb = autoencoder.encode_position(pos)
-                z, _ = autoencoder.encode_pre_quantization(input, pemb)
-                z_latents.append(z.detach().cpu())
-                
-        z_latents = torch.stack(z_latents)
-        self.z_latents = z_latents.reshape(self.hparams.n_samples, -1, self.hparams.resolution, self.hparams.resolution)    
-
-        print('Modalities: ', self.hparams.modalities)
-        print('Data shape: ', self.z_latents.shape)
-        print('Data prepared')
-
-    # normalizes data between -1 and 1
-    def normalize(self, data):
-        return data * 2 / data.max() - 1
-        
-    def setup(self, stage='fit'):
-        self.dataset = IdentityDataset(self.z_latents)
-
-    def train_dataloader(self):
-        return torch.utils.data.DataLoader(
-            self.dataset, 
-            batch_size=self.hparams.batch_size,
-            shuffle=self.hparams.shuffle, 
-            num_workers=self.hparams.num_workers, 
-            pin_memory=True,
-            drop_last=True
-        )
-    
 def global_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -96,6 +22,65 @@ def global_seed(seed):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
+
+class ImageLogger(pl.Callback):
+    def __init__(self,
+        embed_dim,
+        latent_resolution,
+        n_slices,
+        autoencoder,
+        **kwargs
+        ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.latent_resolution = latent_resolution
+        self.n_slices = n_slices
+        self.autoencoder = autoencoder.to(device)
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        # sample images
+        pl_module.eval()
+        with torch.no_grad():
+            latents = pl_module.diffusion.sample(
+                pl_module,
+                torch.randn(
+                    1,
+                    pl_module.hparams.in_channels, 
+                    pl_module.hparams.resolution, 
+                    pl_module.hparams.resolution
+                ).to(pl_module.device)
+            ).reshape(
+                self.n_slices, 
+                self.embed_dim, 
+                self.latent_resolution, 
+                self.latent_resolution
+            ) # => will be of shape (64, 2, 32, 32)
+
+            # selecting sequence of 10 slices with corresponding positions
+            latents = latents[::int(self.n_slices/10), ...] # => will be of shape (10, 2, 32, 32)
+            position = torch.arange(0, self.n_slices, int(self.n_slices/10)).to(pl_module.device)
+
+            # decoding the latent spaces
+            if isinstance(self.autoencoder, GaussianAutoencoder):
+                pemb = self.autoencoder.encode_position(position)
+                generated = self.autoencoder.decode(latents, pemb)
+                generated = torch.tanh(generated)
+            elif isinstance(self.autoencoder, VQAutoencoder):
+                pemb = self.autoencoder.encode_position(position)
+                generated = self.autoencoder.decode_pre_quantization(latents, pemb)
+            else:
+                raise NotImplementedError('Unknown autoencoder type')
+
+            img = torch.cat([
+                torch.hstack([img for img in generated[:, c, ...]]) for c in range(generated.shape[1])
+            ], dim=0)
+
+            wandb.log({
+                'Generation examples': wandb.Image(
+                    img.detach().cpu().numpy(), 
+                    caption='Generation examples'
+                )
+            })
     
 if __name__ == "__main__":
     global_seed(42)
@@ -109,17 +94,39 @@ if __name__ == "__main__":
     
     config = OmegaConf.load(CONFIG_PATH)
     
-    # TODO: specify first stage training or diffusion training
-    
     wandb_logger = wandb.WandbLogger(
         project='cross_correlation_ldm', 
         name='diffusion'
     )
+
+    # autoencoder
+    try:
+        autoencoder = getattr(sys.modules[__name__], config.models.autoencoder.target)
+    except:
+        raise AttributeError('Unknown autoencoder target')
     
-    autoencoder = VQAutoencoder(**config.models.autoencoder)
-    datamodule = DataModule(**config.data, autoencoder=autoencoder, batch_size=8)
+    # load autoencoder weights/hyperparameters
+    autoencoder = autoencoder.load_from_checkpoint('./checkpoints/GaussianAutoencoder-epoch=169.ckpt') # latest weights
+    
+    # data module
+    data_module = DataModule(
+        **config.data,
+        autoencoder=autoencoder,
+        use_latents=True, 
+        batch_size=8, 
+        shuffle=True, 
+        num_workers=8
+    )
+
+    checkpoint_callback = ModelCheckpoint(
+        **config.callbacks.checkpoint,
+        filename='unet-{epoch:02d}'
+    )
+    image_logger = ImageLogger(n_samples=5, modalities=['FLAIR', 'T1CE'])
+
     unet = ResUNet(**config.models.unet)
     
+    # trainer
     trainer = pl.Trainer(
         logger=wandb_logger,
         accelerator='gpu',
@@ -128,8 +135,8 @@ if __name__ == "__main__":
         log_every_n_steps=1,
         enable_progress_bar=True,
         accumulate_grad_batches=2,
-        # callbacks=[ckpt_callback]
+        callbacks=[checkpoint_callback, image_logger]
     )
-    trainer.fit(unet, datamodule)
+    trainer.fit(unet, data_module)
 
     

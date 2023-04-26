@@ -312,7 +312,7 @@ class LPIPSWithDiscriminator(nn.Module):
         self.disc_factor = disc_factor
         self.kl_weight = kl_weight
         self.disc_start = disc_start
-        self.logvar = nn.Parameter(torch.ones(1) * logvar_init)
+        self.logvar = nn.Parameter(torch.ones(1) * logvar_init, requires_grad=True)
         
         # modules
         self.lpips = LPIPS().eval()
@@ -357,7 +357,7 @@ class LPIPSWithDiscriminator(nn.Module):
 
         disc_weight = torch.tensor(0.0)
         if global_step > self.disc_start:
-            disc_weight = self.calculate_adaptive_weight(rec_loss, g_loss, last_layer)
+            disc_weight = self.calculate_adaptive_weight(nll_loss, g_loss, last_layer)
 
         # cos_sim loss
         cos_sim = torch.tensor(0.0)

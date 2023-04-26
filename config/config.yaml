@@ -16,7 +16,7 @@ callbacks:
         monitor: 
         dirpath: ./checkpoints
         save_top_k: 1
-        every_n_epochs: 10
+        every_n_epochs: 5
 models:
     unet:
         in_channels: 8
@@ -25,6 +25,7 @@ models:
         T: 1000
         resolution: 128
         num_channels: 128
+        latent_shape: [64, 2, 32, 32]
         channel_mult: 
         - 1
         - 2
@@ -47,6 +48,7 @@ models:
         embed_dim: 2
         z_channels: 2
         z_double: true
+        latent_dim: 32
         pemb_dim: 128
         T: 64
         num_channels: 128
@@ -58,7 +60,7 @@ models:
         attn: []
         learning_rate: 0.00001
         loss:
-            disc_start: 10001
+            disc_start: 15001
             codebook_weight: 1.0
             pixel_weight: 1.0
             perceptual_weight: 1.0

@@ -160,25 +160,29 @@ class GaussianAutoencoder(pl.LightningModule):
         self.automatic_optimization = False
         self.save_hyperparameters()
         
-    def forward(self, x, sample_posterior=True):
-        posterior = self.encode(x)
+    def forward(self, x, pos, sample_posterior=True):
+        pemb = self.positional_encoder(pos)
+        posterior = self.encode(x, pemb)
         if sample_posterior:
             z = posterior.sample()
         else:
             z = posterior.mode()
-        x = self.decode(z)
+        x = self.decode(z, pemb)
         return torch.tanh(x), z, posterior
     
-    def encode(self, x):
-        h = self.encoder(x)
+    def encode(self, x, pemb):
+        h = self.encoder(x, pemb)
         moments = self.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
         return posterior
     
-    def decode(self, z):
+    def decode(self, z, pemb):
         z = self.post_quant_conv(z)
-        x = self.decoder(z)
+        x = self.decoder(z, pemb)
         return x
+    
+    def encode_position(self, position):
+        return self.positional_encoder(position)
     
     def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
         pass # TODO: EMA
@@ -191,12 +195,12 @@ class GaussianAutoencoder(pl.LightningModule):
         x, pos = batch
         x, pos = x.type(torch.float16), pos.type(torch.long)
         
-        x_hat, z_i, posterior = self.forward(x, pos, return_indices=True)
+        x_hat, z, posterior = self.forward(x, pos, sample_posterior=True)
 
         ########################
         # Optimize Autoencoder #
         ########################
-        ae_loss, ae_log = self.loss.autoencoder_loss(x, x_hat, z_i, posterior, self.global_step, last_layer=self.decoder.out_conv[-1].weight)
+        ae_loss, ae_log = self.loss.autoencoder_loss(x, x_hat, z, posterior, self.global_step, last_layer=self.decoder.out_conv[-1].weight)
         ae_opt.zero_grad(set_to_none=True)
         self.manual_backward(ae_loss)
         ae_opt.step()

@@ -7,6 +7,9 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 import os
 
+from models.gaussian_autoencoder import GaussianAutoencoder
+from models.vector_quantized_autoencoder import VQAutoencoder
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class IdentityDataset(torch.utils.data.Dataset):
@@ -133,7 +136,12 @@ class DataModule(pl.LightningDataModule):
             with torch.no_grad():
                 pos = torch.arange(0, 64, device=self.device, dtype=torch.long)
                 pemb = self.autoencoder.encode_position(pos)
-                z, _ = self.autoencoder.encode_pre_quantization(input, pemb)
+                if isinstance(self.autoencoder, GaussianAutoencoder):
+                    z = self.autoencoder.encode(input, pemb).sample()
+                elif isinstance(self.autoencoder, VQAutoencoder):
+                    z, _ = self.autoencoder.encode_pre_quantization(input, pemb)
+                else:
+                    raise NotImplementedError
                 z_latents.append(z.detach().cpu())
                 
         z_latents = torch.stack(z_latents)

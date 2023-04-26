@@ -41,7 +41,8 @@ class ImageLogger(pl.Callback):
             x, pos = x.to(pl_module.device, torch.float32), pos.to(pl_module.device, torch.long)
 
             x, pos = x[:self.n_samples], pos[:self.n_samples]
-            x_hat, _, _ = pl_module(x, pos)
+            x_hat = pl_module(x, pos)[0]
+
 
             for idx, m in enumerate(self.modalities):
                 img = torch.cat([
@@ -105,7 +106,6 @@ if __name__ == '__main__':
         max_epochs=200,
         log_every_n_steps=1,
         enable_progress_bar=True,
-        accumulate_grad_batches=2,
         callbacks=[checkpoint_callback, image_logger]
     )
 
