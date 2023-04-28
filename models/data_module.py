@@ -137,7 +137,7 @@ class DataModule(pl.LightningDataModule):
                 pos = torch.arange(0, 64, device=self.device, dtype=torch.long)
                 pemb = self.autoencoder.encode_position(pos)
                 if isinstance(self.autoencoder, GaussianAutoencoder):
-                    z = self.autoencoder.encode(input, pemb).sample()
+                    z = self.autoencoder.encode(input, pemb).mode()
                 elif isinstance(self.autoencoder, VQAutoencoder):
                     z, _ = self.autoencoder.encode_pre_quantization(input, pemb)
                 else:
@@ -146,6 +146,14 @@ class DataModule(pl.LightningDataModule):
                 
         z_latents = torch.stack(z_latents)
         self.z_latents = z_latents.reshape(self.hparams.n_samples, -1, self.hparams.resolution, self.hparams.resolution)
+
+        # rescaling latents
+        self.scale = self.z_latents.std()
+        self.z_latents = self.z_latents / self.scale
+
+        print('Scale:', self.scale)
+        print('Latents standard deviation:', self.z_latents.std())
+        print('Latents shape:', self.z_latents.shape)
         
     def setup(self, stage='fit'):
         self.normalize()

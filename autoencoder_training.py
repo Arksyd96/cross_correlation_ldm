@@ -1,15 +1,11 @@
 import numpy as np
 import os
 import torch
-import torch.nn as nn
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 import wandb
 from pytorch_lightning.loggers import wandb as wandb_logger
-from nibabel.processing import resample_to_output
-from nibabel import load
 from omegaconf import OmegaConf
-import matplotlib.pyplot as plt
 
 from models.vector_quantized_autoencoder import VQAutoencoder
 from models.gaussian_autoencoder import GaussianAutoencoder

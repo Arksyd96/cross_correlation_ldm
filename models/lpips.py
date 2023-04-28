@@ -370,17 +370,17 @@ class LPIPSWithDiscriminator(nn.Module):
         loss = weighted_nll_loss + self.kl_weight + kl_loss + g_loss * disc_weight + cos_sim * self.cos_weight
 
         log = {
-                "total_loss": loss.clone().detach().mean(),
-                "kl_loss": kl_loss.detach().mean(),
-                "l1_loss": l1_loss.detach().mean(),
-                "p_loss": p_loss.detach().mean(),
-                "rec_loss": rec_loss.detach().mean(), # L1 + p_loss
-                "nll_loss": nll_loss.detach().mean(),
-                "logvar": self.logvar.detach().mean(),
-                "disc_weight": disc_weight.detach(),
-                "g_loss": g_loss.detach().mean(),
-                "cos_sim": cos_sim.detach().mean()
-            }
+            "total_loss": loss.clone().detach().mean(),
+            "kl_loss": kl_loss.detach().mean(),
+            "l1_loss": l1_loss.detach().mean(),
+            "p_loss": p_loss.detach().mean(),
+            "rec_loss": rec_loss.detach().mean(), # L1 + p_loss
+            "nll_loss": nll_loss.detach().mean(),
+            "logvar": self.logvar.detach().mean(),
+            "disc_weight": disc_weight.detach(),
+            "g_loss": g_loss.detach().mean(),
+            "cos_sim": cos_sim.detach().mean()
+        }
         
         return loss, log
     
