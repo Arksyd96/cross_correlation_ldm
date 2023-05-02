@@ -6,6 +6,10 @@ from omegaconf import OmegaConf
 from models.data_module import DataModule
 from models.vector_quantized_autoencoder import VQAutoencoder
 
+from models.unet_3d import ResUNet3D
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 if __name__ == "__main__":
     
 
@@ -14,14 +18,13 @@ if __name__ == "__main__":
         raise FileNotFoundError('Config file not found')
     
     config = OmegaConf.load(CONFIG_PATH)
-    autoencoder = VQAutoencoder(**config.models.autoencoder)
-    dm = DataModule(
-        **config.data, 
-        autoencoder=autoencoder, 
-        use_2d_slices=True,
-        batch_size=8,
-        shuffle=True,
-        num_workers=4
-    )
+
+    unet = ResUNet3D(**config.models.unet).to(device)
+    print(unet.hparams)
+
+    x = torch.randn(1, 2, 64, 32, 32).to(device)
+    time = torch.randint(0, config.models.unet.T, (1,), dtype=torch.long, device=device)
+
+    print(unet(x, time).shape)
 
     

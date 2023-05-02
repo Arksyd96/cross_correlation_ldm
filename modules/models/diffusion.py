@@ -15,9 +15,10 @@ class DiffusionModule(nn.Module):
         self.alphas_hat = torch.cumprod(self.alphas, dim=0).to(device)
 
     def forward_process(self, images, time):
-        noise = torch.randn_like(images).to(images.device)
-        alpha_hat = self.alphas_hat[time, None, None, None]
-        return torch.sqrt(alpha_hat) * images + torch.sqrt(1 - alpha_hat) * noise, noise
+        eps = torch.randn_like(images).to(images.device) 
+        gamma = eps + 0.1 * torch.randn_like(images).to(images.device)
+        alpha_hat = self.alphas_hat[time, None, None, None, None]
+        return torch.sqrt(alpha_hat) * images + torch.sqrt(1 - alpha_hat) * gamma, eps
     
     def linear_beta_schedule(self, timesteps):
         scale = 1000 / timesteps

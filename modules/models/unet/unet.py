@@ -5,11 +5,11 @@ import numpy as np
 from tqdm import tqdm
 import pytorch_lightning as pl
 
-from .modules import (
+from ..modules import (
     TimePositionalEmbedding, 
     EncodingBlock, DecodingBlock
 )
-from .diffusion import DiffusionModule
+from ..diffusion import DiffusionModule
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

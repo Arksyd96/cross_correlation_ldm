@@ -3,13 +3,13 @@ import os
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
-import wandb
 from pytorch_lightning.loggers import wandb as wandb_logger
 from omegaconf import OmegaConf
 
-from models.vector_quantized_autoencoder import VQAutoencoder
-from models.gaussian_autoencoder import GaussianAutoencoder
-from models.data_module import DataModule
+from modules.models.autoencoder.vector_quantized_autoencoder import VQAutoencoder
+from modules.models.autoencoder.gaussian_autoencoder import GaussianAutoencoder
+from modules.data_module import DataModule
+from modules.loggers import ReconstructionImageLogger
 
 def global_seed(seed):
     np.random.seed(seed)
@@ -18,39 +18,6 @@ def global_seed(seed):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
-
-class ImageLogger(pl.Callback):
-    def __init__(self,
-        modalities=['t1', 't1ce', 't2', 'flair'], 
-        n_samples=5,
-        **kwargs
-        ):
-        super().__init__()
-        self.n_samples = n_samples
-        self.modalities = modalities
-
-    def on_train_epoch_end(self, trainer, pl_module):
-        # sample images
-        pl_module.eval()
-        with torch.no_grad():
-            x, pos = next(iter(trainer.train_dataloader))
-            x, pos = x.to(pl_module.device, torch.float32), pos.to(pl_module.device, torch.long)
-
-            x, pos = x[:self.n_samples], pos[:self.n_samples]
-            x_hat = pl_module(x, pos)[0]
-
-
-            for idx, m in enumerate(self.modalities):
-                img = torch.cat([
-                    torch.hstack([img for img in x[:, idx, ...]]),
-                    torch.hstack([img for img in x_hat[:, idx, ...]]),
-                ], dim=0)
-                wandb.log({
-                    'Reconstruction examples': wandb.Image(
-                        img.detach().cpu().numpy(), 
-                        caption='{} - {} (Top are originals)'.format(m, trainer.current_epoch)
-                    )
-                })
 
 if __name__ == '__main__':
     global_seed(42)
@@ -92,7 +59,7 @@ if __name__ == '__main__':
         **config.callbacks.checkpoint,
         filename='{}-{}'.format(config.models.autoencoder.target, '{epoch:02d}')
     )
-    image_logger = ImageLogger(n_samples=5, modalities=['FLAIR', 'T1CE'])
+    image_logger = ReconstructionImageLogger(n_samples=5, modalities=['FLAIR', 'T1CE'])
 
     # training
     trainer = pl.Trainer(

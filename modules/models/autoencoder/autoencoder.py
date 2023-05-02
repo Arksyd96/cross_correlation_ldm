@@ -2,8 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .unet import EncodingBlock, DecodingBlock
-
+from ..modules import EncodingBlock, DecodingBlock
 
 class Encoder(nn.Module):
     def __init__(self, in_channels) -> None:

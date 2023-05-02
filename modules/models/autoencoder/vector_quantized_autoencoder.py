@@ -1,15 +1,15 @@
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import pytorch_lightning as pl
 
-from .modules import (
+from ..modules import (
     TimePositionalEmbedding, EncodingBlock, DecodingBlock,
     ResidualBlock, SelfAttention
 )
-from models.lpips import LPIPSWithDiscriminator
 
+from ...loss.vector_quantizer import VectorQuantizer
+from ...loss.lpips import VQLPIPSWithDiscriminator
 
 class Encoder(nn.Module):
     def __init__(
@@ -108,19 +108,19 @@ class Decoder(nn.Module):
             x = decoder(x, pemb)
         x = self.out_conv(x)
         return x
-    
-    
-class GaussianAutoencoder(pl.LightningModule):
-    def __init__(self, 
+
+class VQAutoencoder(pl.LightningModule):
+    def __init__(self,
         in_channels, 
-        out_channels,
-        embed_dim, 
+        out_channels, 
+        n_embed, 
+        embed_dim,
         z_channels=4, 
-        z_double=True,
-        pemb_dim=128,
-        T=64, 
+        z_double=False, 
+        pemb_dim=128, 
+        T=64,
         num_channels=128, 
-        channels_mult=[1, 2, 4, 4], 
+        channels_mult=[1, 2, 4], 
         num_res_blocks=2, 
         attn=[],
         learning_rate=1e-5,
@@ -128,17 +128,18 @@ class GaussianAutoencoder(pl.LightningModule):
         **kwargs
     ) -> None:
         super().__init__()
-        assert z_double == True, 'z_double must be True for GaussianAutoencoder'
         if attn.__len__() > 0:
             assert channels_mult.__len__() == attn.__len__(), 'channels_mult and attn must have the same length'
             self.attn = attn
         else:
             self.attn = [False] * channels_mult.__len__()
 
-        self.z_channels = z_channels
+        self.embed_dim = embed_dim
+        self.n_embed = n_embed
+        self.z_channels = z_channels if not z_double else z_channels * 2
         self.learning_rate = learning_rate
         self.lr_d_factor = lr_d_factor
-        
+
         # architecture modules
         self.positional_encoder = nn.Sequential(
             TimePositionalEmbedding(dimension=pemb_dim, T=T, device='cuda'),
@@ -146,47 +147,79 @@ class GaussianAutoencoder(pl.LightningModule):
             nn.GELU(),
             nn.Linear(128 * 4, pemb_dim)
         )
-        self.encoder = Encoder(in_channels, 2 * z_channels, pemb_dim, num_channels, channels_mult, num_res_blocks, self.attn)
-        self.decoder = Decoder(out_channels, z_channels, pemb_dim, num_channels, channels_mult, num_res_blocks, self.attn)
-        self.quant_conv = nn.Conv2d(2 * z_channels, 2 * embed_dim, kernel_size=1)
-        self.post_quant_conv = nn.Conv2d(embed_dim, z_channels, kernel_size=1)
+        self.encoders = nn.ModuleList([
+            Encoder(1, z_channels, pemb_dim, num_channels, channels_mult, num_res_blocks, self.attn) for _ in range(in_channels)
+        ])
+        decoder_in_channels = in_channels * z_channels
+        vq_embed_dim = self.embed_dim * in_channels
+        self.decoder = Decoder(out_channels, decoder_in_channels, pemb_dim, num_channels, channels_mult, num_res_blocks, self.attn)
+        self.quantizer = VectorQuantizer(self.n_embed, vq_embed_dim, beta=0.25, remap=None)
+        self.quant_conv = nn.Conv2d(decoder_in_channels, vq_embed_dim, kernel_size=1)
+        self.post_quant_conv = nn.Conv2d(vq_embed_dim, decoder_in_channels, kernel_size=1)
 
-        # loss function
-        self.loss = LPIPSWithDiscriminator(**kwargs['loss'])
-        
+        # loss functions
+        self.loss = VQLPIPSWithDiscriminator(**kwargs['loss'])
+
         # TODO: Add EMA
         
         # pytorch lightining states
         self.automatic_optimization = False
         self.save_hyperparameters()
-        
-    def forward(self, x, pos, sample_posterior=True):
-        pemb = self.positional_encoder(pos)
-        posterior = self.encode(x, pemb)
-        if sample_posterior:
-            z = posterior.sample()
-        else:
-            z = posterior.mode()
-        x = self.decode(z, pemb)
-        return torch.tanh(x), z, posterior
-    
+
     def encode(self, x, pemb):
-        h = self.encoder(x, pemb)
-        moments = self.quant_conv(h)
-        posterior = DiagonalGaussianDistribution(moments)
-        return posterior
+        z_i = []
+        # forwarding each channel through its own encoder
+        for c_i, encoder in enumerate(self.encoders):
+            x_i = x[:, c_i, None]
+            z_i.append(encoder(x_i, pemb))
+
+        # concatenating the channels
+        z = torch.cat(z_i, dim=1)
+        z = self.quant_conv(z)
+        z_q, qloss, info = self.quantizer(z)
+        return z_q, z_i, qloss, info
     
-    def decode(self, z, pemb):
-        z = self.post_quant_conv(z)
-        x = self.decoder(z, pemb)
+    def encode_pre_quantization(self, x, pemb):
+        z_i = []
+        # forwarding each channel through its own encoder
+        for c_i, encoder in enumerate(self.encoders):
+            z_i.append(encoder(x[:, c_i, None], pemb))
+
+        # concatenating the channels
+        z = torch.cat(z_i, dim=1)
+        z = self.quant_conv(z)
+        return z, z_i
+    
+    def decode(self, z_q, pemb):
+        z_q = self.post_quant_conv(z_q)
+        # TODO: Cross-attention avec mask ici
+        x = self.decoder(z_q, pemb)
         return x
+    
+    def decode_code(self, code_b, pemb):
+        z_q = self.quantizer.embedding(code_b)
+        x = self.decode(z_q, pemb)
+        return torch.tanh(x)
+    
+    def decode_pre_quantization(self, z, pemb):
+        z_q, qloss, info = self.quantizer(z)
+        x = self.decode(z_q, pemb)
+        return torch.tanh(x), qloss, info
     
     def encode_position(self, position):
         return self.positional_encoder(position)
     
+    def forward(self, x, position, return_indices=False):
+        pemb = self.positional_encoder(position)
+        z_q, z_i, qloss, (_, _, indices) = self.encode(x, pemb)
+        x = self.decode(z_q, pemb)
+        if return_indices:
+            return torch.tanh(x), z_i, qloss, indices
+        return torch.tanh(x), z_i, qloss
+
     def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
         pass # TODO: EMA
-    
+
     def training_step(self, batch, batch_idx):
         # optimizers & schedulers
         ae_opt, disc_opt = self.optimizers()
@@ -195,12 +228,12 @@ class GaussianAutoencoder(pl.LightningModule):
         x, pos = batch
         x, pos = x.type(torch.float16), pos.type(torch.long)
         
-        x_hat, z, posterior = self.forward(x, pos, sample_posterior=True)
+        x_hat, z_i, qloss, _ = self.forward(x, pos, return_indices=True)
 
         ########################
         # Optimize Autoencoder #
         ########################
-        ae_loss, ae_log = self.loss.autoencoder_loss(x, x_hat, z, posterior, self.global_step, last_layer=self.decoder.out_conv[-1].weight)
+        ae_loss, ae_log = self.loss.autoencoder_loss(qloss, x, x_hat, z_i, self.global_step, last_layer=self.decoder.out_conv[-1].weight)
         ae_opt.zero_grad(set_to_none=True)
         self.manual_backward(ae_loss)
         ae_opt.step()
@@ -219,12 +252,14 @@ class GaussianAutoencoder(pl.LightningModule):
         self.log_dict(ae_log, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log_dict(disc_log, on_step=True, on_epoch=True, prog_bar=False, logger=True)
 
+    
     def configure_optimizers(self):
-        ae_opt = torch.optim.AdamW(list(self.encoder.parameters()) + 
+        ae_opt = torch.optim.AdamW(list(self.encoders.parameters()) + 
                                    list(self.decoder.parameters()) + 
                                    list(self.positional_encoder.parameters()) +
                                    list(self.quant_conv.parameters()) +
-                                   list(self.post_quant_conv.parameters()),
+                                   list(self.post_quant_conv.parameters()) +
+                                   list(self.quantizer.parameters()), 
                                    lr=self.learning_rate, weight_decay=1e-6, betas=(0.5, 0.9))
         disc_opt = torch.optim.AdamW(list(self.loss.discriminator.parameters()), 
                                      lr=self.learning_rate * self.lr_d_factor, weight_decay=1e-6, betas=(0.5, 0.9))
@@ -247,44 +282,9 @@ class GaussianAutoencoder(pl.LightningModule):
         ]
 
         return [ae_opt, disc_opt], schedulers
+    
 
-        
-class DiagonalGaussianDistribution(object):
-    def __init__(self, parameters, deterministic=False):
-        self.parameters = parameters
-        self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
-        self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
-        self.deterministic = deterministic
-        self.std = torch.exp(0.5 * self.logvar)
-        self.var = torch.exp(self.logvar)
-        if self.deterministic:
-            self.var = self.std = torch.zeros_like(self.mean).to(device=self.parameters.device)
 
-    def sample(self):
-        x = self.mean + self.std * torch.randn(self.mean.shape).to(device=self.parameters.device)
-        return x
 
-    def kl(self, other=None):
-        if self.deterministic:
-            return torch.Tensor([0.])
-        else:
-            if other is None:
-                return 0.5 * torch.sum(torch.pow(self.mean, 2)
-                                       + self.var - 1.0 - self.logvar,
-                                       dim=[1, 2, 3])
-            else:
-                return 0.5 * torch.sum(
-                    torch.pow(self.mean - other.mean, 2) / other.var
-                    + self.var / other.var - 1.0 - self.logvar + other.logvar,
-                    dim=[1, 2, 3])
-
-    def nll(self, sample, dims=[1,2,3]):
-        if self.deterministic:
-            return torch.Tensor([0.])
-        logtwopi = np.log(2.0 * np.pi)
-        return 0.5 * torch.sum(
-            logtwopi + self.logvar + torch.pow(sample - self.mean, 2) / self.var,
-            dim=dims)
-
-    def mode(self):
-        return self.mean
+    
+    

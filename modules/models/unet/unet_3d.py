@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import pytorch_lightning as pl
 
-from .diffusion import DiffusionModule
+from ..diffusion import DiffusionModule
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -88,7 +88,7 @@ class SelfAttention(nn.Module):
         self.k = nn.Conv3d(in_channels, num_heads * head_dim, kernel_size=1)
         self.v = nn.Conv3d(in_channels, num_heads * head_dim, kernel_size=1)
         self.norm = nn.GroupNorm(groups, in_channels)
-        self.proj = nn.Conv2d(num_heads * head_dim, in_channels, kernel_size=1)
+        self.proj = nn.Conv3d(num_heads * head_dim, in_channels, kernel_size=1)
 
     def forward(self, x):
         B, _, H, W, D = x.shape
@@ -145,7 +145,7 @@ class DecodingBlock(nn.Module):
         return self.upsample(x)
     
 
-class ResUNet(pl.LightningModule):
+class ResUNet3D(pl.LightningModule):
     def __init__(self, 
         in_channels, 
         out_channels, 
@@ -179,7 +179,7 @@ class ResUNet(pl.LightningModule):
             nn.Linear(self.temb_latent_dim, self.temb_latent_dim),
         )
         
-        self.in_conv = nn.Conv2d(in_channels, num_channels, kernel_size=3, padding='same')
+        self.in_conv = nn.Conv3d(in_channels, num_channels, kernel_size=3, padding='same')
         self.encoder = nn.ModuleList([
             EncodingBlock(
                 in_channels=num_channels * self.channel_mult[idx],
@@ -213,7 +213,7 @@ class ResUNet(pl.LightningModule):
         self.out_conv = nn.Sequential(
             nn.GroupNorm(num_groups=32, num_channels=num_channels * 2),
             nn.SiLU(),
-            nn.Conv2d(in_channels=num_channels * 2, out_channels=out_channels, kernel_size=3, padding=1)
+            nn.Conv3d(in_channels=num_channels * 2, out_channels=out_channels, kernel_size=3, padding=1)
         )
         
         # pl
@@ -244,12 +244,12 @@ class ResUNet(pl.LightningModule):
         return self.out_conv(x)
     
     def training_step(self, batch, batch_idx):
-        z_q = batch[0].type(torch.float16)
-        B = z_q.shape[0]
+        z = batch[0].type(torch.float16)
+        B = z.shape[0]
         
         # forward step
         times = torch.randint(low=0, high=self.T, size=(B,), device=device, dtype=torch.long)
-        x_t, noise = self.diffusion.forward_process(z_q, times)
+        x_t, noise = self.diffusion.forward_process(z, times)
         x_t = x_t.to(device, dtype=torch.float16)
         
         # backward step
