@@ -84,7 +84,7 @@ class ResUNet(pl.LightningModule):
             nn.Conv2d(in_channels=num_channels * 2, out_channels=out_channels, kernel_size=3, padding=1)
         )
         
-        # pl
+        # pytorch lightning
         self.save_hyperparameters()
 
     def forward(self, x, time):

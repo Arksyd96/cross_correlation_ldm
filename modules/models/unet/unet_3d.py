@@ -144,7 +144,6 @@ class DecodingBlock(nn.Module):
             x = attn_block(x)
         return self.upsample(x)
     
-
 class ResUNet3D(pl.LightningModule):
     def __init__(self, 
         in_channels, 
