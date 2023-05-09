@@ -1,8 +1,8 @@
 import pytorch_lightning as pl
 import torch
 import wandb
-from models.autoencoder.gaussian_autoencoder import GaussianAutoencoder
-from models.autoencoder.vector_quantized_autoencoder import VQAutoencoder
+from .models.autoencoder.gaussian_autoencoder import GaussianAutoencoder
+from .models.autoencoder.vector_quantized_autoencoder import VQAutoencoder
 from torchmetrics.image.fid import FrechetInceptionDistance
 from tqdm import tqdm
 import os
@@ -11,35 +11,29 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class ImageLogger(pl.Callback):
     def __init__(self,
-        embed_dim,
-        latent_dim,
-        n_slices,
-        autoencoder,
+        shape=(2, 32, 32),
+        n_slices=64,
+        autoencoder=None,
         every_n_epochs=10,
         **kwargs
         ):
         super().__init__()
-        self.embed_dim = embed_dim
-        self.latent_dim = latent_dim
-        self.n_slices = n_slices
+        self.shape = shape
         self.autoencoder = autoencoder.to(device)
         self.every_n_epochs = every_n_epochs
+        self.n_slices = n_slices
 
     def on_train_epoch_end(self, trainer, pl_module):
         if (trainer.current_epoch + 1) % self.every_n_epochs == 0:
             # sample images
             pl_module.eval()
             with torch.no_grad():
+                C, H, W = self.shape
                 latents = pl_module.diffusion.sample(
-                    pl_module,
-                    torch.randn(
-                        1,
-                        self.embed_dim,
-                        self.n_slices,
-                        self.latent_dim,
-                        self.latent_dim
-                    ).to(pl_module.device)
-                ).permute(0, 2, 1, 3, 4).squeeze(0) # => will be of shape (64, 2, 32, 32)
+                    pl_module
+                ).reshape(
+                    C, self.n_slices, H, W
+                ).permute(1, 0, 2, 3)
 
                 # selecting sequence of 10 slices with corresponding positions
                 latents = latents[::int(self.n_slices/10), ...] # => will be of shape (10, 2, 32, 32)
@@ -51,7 +45,7 @@ class ImageLogger(pl.Callback):
                     generated = self.autoencoder.decode(latents, pemb)
                     generated = torch.tanh(generated)
                 elif isinstance(self.autoencoder, VQAutoencoder):
-                    generated = self.autoencoder.decode_pre_quantization(latents, pemb)
+                    generated, _, _ = self.autoencoder.decode_pre_quantization(latents, pemb)
                 else:
                     raise NotImplementedError('Unknown autoencoder type')
 

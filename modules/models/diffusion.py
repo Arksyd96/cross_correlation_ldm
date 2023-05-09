@@ -6,9 +6,10 @@ from tqdm import tqdm
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class DiffusionModule(nn.Module):
-    def __init__(self, T=1000, beta_schedule='cosine') -> None:
+    def __init__(self, noise_shape, T=1000, beta_schedule='cosine') -> None:
         super().__init__()
         assert beta_schedule in ['linear', 'cosine'], 'beta_schedule must be either linear or cosine'
+        self.noise_shape = noise_shape
         self.T = T
         self.betas = self.cosine_beta_schedule(T) if beta_schedule == 'cosine' else self.linear_beta_schedule(T)
         self.alphas = 1 - self.betas
@@ -17,7 +18,7 @@ class DiffusionModule(nn.Module):
     def forward_process(self, images, time):
         eps = torch.randn_like(images).to(images.device) 
         gamma = eps + 0.1 * torch.randn_like(images).to(images.device)
-        alpha_hat = self.alphas_hat[time, None, None, None, None]
+        alpha_hat = self.alphas_hat[(time,) + (None,) * len(self.noise_shape)]
         return torch.sqrt(alpha_hat) * images + torch.sqrt(1 - alpha_hat) * gamma, eps
     
     def linear_beta_schedule(self, timesteps):
@@ -42,10 +43,13 @@ class DiffusionModule(nn.Module):
         return model(x_t, time)
     
     @torch.no_grad()
-    def sample(self, model, x_T):
+    def sample(self, model, x_T=None, n_sample=1):
         x_t = x_T
+        if x_t is None:
+            x_t = torch.randn(n_sample, *self.noise_shape).to(device)
+
         for timestep in tqdm(range(self.T - 1, -1, -1), desc='Sampling', position=0, leave=True):
-            times = torch.full(size=(x_T.shape[0],), fill_value=timestep, dtype=torch.long, device=x_t.device)
+            times = torch.full(size=(x_t.shape[0],), fill_value=timestep, dtype=torch.long, device=x_t.device)
             eps = self.reverse_process(model, x_t, times)
             beta_t = self.betas[timestep].to(x_t.device)
             alpha_t = self.alphas[timestep].to(x_t.device)

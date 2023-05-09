@@ -1,9 +1,6 @@
 data:
-    orig_data_resolution: 240
-    orig_num_slices: 155
-    resolution: 128
-    num_slices: 64
-    n_samples: 500
+    shape: [64, 128, 128] # depth, height, width
+    n_samples: 10
     modalities:
     - flair
     - t1ce
@@ -25,13 +22,11 @@ callbacks:
         filename: fid_state_dict.pt
 models:
     unet:
-        in_channels: 2
-        out_channels: 2
-        learning_rate: 0.000005
+        input_shape: [4, 64, 32, 32] # channels, (depth), height, width
+        learning_rate: 0.00001
         T: 1000
-        resolution: 128
         num_channels: 128
-        latent_shape: [64, 2, 32, 32]
+        from_checkpoint: false
         channel_mult: 
         - 1
         - 2
@@ -43,13 +38,13 @@ models:
         - false
         - false
         - true
-        - false
+        - true
         num_res_blocks: 2
         beta_schedule: cosine
     autoencoder:
-        target: GaussianAutoencoder
-        in_channels: 2
-        out_channels: 2 
+        target: VQAutoencoder
+        input_shape: [2, 128, 128] # channels, height, width
+        latent_shape: [4, 32, 32] # in_channels * embed_dim, height, width
         n_embed: 8192
         embed_dim: 2
         z_channels: 2

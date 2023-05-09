@@ -111,10 +111,9 @@ class Decoder(nn.Module):
 
 class VQAutoencoder(pl.LightningModule):
     def __init__(self,
-        in_channels, 
-        out_channels, 
-        n_embed, 
-        embed_dim,
+        input_shape=[2, 128, 128],
+        n_embed=8192, 
+        embed_dim=2,
         z_channels=4, 
         z_double=False, 
         pemb_dim=128, 
@@ -139,6 +138,7 @@ class VQAutoencoder(pl.LightningModule):
         self.z_channels = z_channels if not z_double else z_channels * 2
         self.learning_rate = learning_rate
         self.lr_d_factor = lr_d_factor
+        in_channels = out_channels = input_shape[0]
 
         # architecture modules
         self.positional_encoder = nn.Sequential(

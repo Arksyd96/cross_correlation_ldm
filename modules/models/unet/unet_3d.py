@@ -146,8 +146,7 @@ class DecodingBlock(nn.Module):
     
 class ResUNet3D(pl.LightningModule):
     def __init__(self, 
-        in_channels, 
-        out_channels, 
+        input_shape,
         T=1000,
         num_channels=128,
         channel_mult=[1, 2, 2, 4],
@@ -166,9 +165,14 @@ class ResUNet3D(pl.LightningModule):
         self.temb_latent_dim = temb_dim * temb_dim_mult
         self.learning_rate = learning_rate
         self.T = T
+        in_channels = out_channels = input_shape[0]
         
         # diffuser
-        self.diffusion = DiffusionModule(T=self.T, beta_schedule=beta_schedule)
+        self.diffusion = DiffusionModule(
+            noise_shape=input_shape,
+            T=self.T, 
+            beta_schedule=beta_schedule
+        )
         
         # architecture modules
         self.positional_encoder = nn.Sequential(

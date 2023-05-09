@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import os
 import pytorch_lightning as pl
-import wandb
 from pytorch_lightning.loggers import wandb as wandb_logger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from omegaconf import OmegaConf
@@ -11,6 +10,9 @@ import glob
 
 # from models.unet import ResUNet
 from modules.models.unet.unet_3d import ResUNet3D
+from modules.models.unet.unet import ResUNet
+from modules.models.autoencoder.vector_quantized_autoencoder import VQAutoencoder
+from modules.models.autoencoder.gaussian_autoencoder import GaussianAutoencoder
 from modules.data_module import DataModule
 from modules.loggers import ImageLogger
 
@@ -36,14 +38,18 @@ if __name__ == "__main__":
         raise FileNotFoundError('Config file not found')
     
     config = OmegaConf.load(CONFIG_PATH)
+
+    dims = '3D' if len(config.models.unet.input_shape) == 4 else ''
     
     logger = wandb_logger.WandbLogger(
         project='cross_correlation_ldm', 
-        name='diffusion'
+        name='diffusion{}-{}'.format(
+            dims,
+            config.models.autoencoder.target
+        ),
     )
 
-    # autoencoder
-    try:
+    try: # autoencoder
         target_class = getattr(sys.modules[__name__], config.models.autoencoder.target)
     except:
         raise AttributeError('Unknown autoencoder target')
@@ -58,7 +64,8 @@ if __name__ == "__main__":
     data_module = DataModule(
         **config.data,
         autoencoder=autoencoder,
-        use_latents=True, 
+        use_latents=True,
+        depth_as_channels=False,
         batch_size=16, 
         shuffle=True, 
         num_workers=8
@@ -66,15 +73,16 @@ if __name__ == "__main__":
 
     checkpoint_callback = ModelCheckpoint(
         **config.callbacks.checkpoint,
-        filename='UNet3D-{}-{}'.format(type(autoencoder).__name__, '{epoch:02d}')
+        filename='UNet{}-{}-{}'.format(
+            dims, type(autoencoder).__name__, '{epoch:02d}'
+        )
     )
 
     image_logger = ImageLogger(
-        embed_dim=config.models.autoencoder.embed_dim,
-        latent_dim=config.models.autoencoder.latent_dim,
-        n_slices=config.data.num_slices,
+        shape=config.models.autoencoder.latent_shape,
+        num_slices=config.data.shape[0],
         autoencoder=autoencoder,
-        every_n_epochs=50
+        every_n_epochs=1
     )
 
     # fid_logger = FIDLogger(
@@ -82,21 +90,32 @@ if __name__ == "__main__":
     #     data_module=data_module,
     # )
 
-    unet_weights = glob.glob(config.callbacks.checkpoint.dirpath + '/UNet3D*.ckpt')
-    if unet_weights.__len__() != 0:
-        print('Loaded UNet3D weights from: ', unet_weights[-1])
-        unet = ResUNet3D.load_from_checkpoint(unet_weights[-1])
-    else:    
-        unet = ResUNet3D(**config.models.unet)
+    # unet
+    try:
+        unet_target_class = getattr(sys.modules[__name__], 'ResUNet{}'.format(dims))
+    except:
+        raise AttributeError('Unknown UNet target')
+    
+    # loading unet weights
+    unet_weights = glob.glob(config.callbacks.checkpoint.dirpath + '/UNet{}*.ckpt'.format(dims))
+
+    if unet_weights.__len__() != 0 and config.models.unet.from_checkpoint:
+        unet = unet_target_class.load_from_checkpoint(unet_weights[-1])
+        print('Loaded UNet weights from: ', unet_weights[-1])
+    else:
+        unet = unet_target_class(**config.models.unet)
+
+    print('Using UNet: ', type(unet).__name__)
     
     # trainer
     trainer = pl.Trainer(
         logger=logger,
         accelerator='gpu',
         precision='16-mixed',
-        max_epochs=6000,
+        max_epochs=20000,
         log_every_n_steps=1,
         enable_progress_bar=True,
+        fast_dev_run=5,
         callbacks=[checkpoint_callback, image_logger]
     )
     trainer.fit(unet, data_module)
