@@ -146,5 +146,3 @@ class ResUNet(pl.LightningModule):
         
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
     
-    
-    

@@ -13,8 +13,7 @@ class EMA(pl.Callback):
     def on_before_zero_grad(self, trainer, pl_module, optimizer):
         for name, param in pl_module.named_parameters():
             if param.requires_grad:
-                decay = self.decay_rate
-                self.shadow_params[name] -= (1 - decay) * (self.shadow_params[name] - param.data)
+                self.shadow_params[name] -= (1 - self.decay_rate) * (self.shadow_params[name] - param.data)
 
     def on_after_backward(self, trainer, pl_module):
         for name, param in pl_module.named_parameters():

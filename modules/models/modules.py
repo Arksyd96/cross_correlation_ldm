@@ -98,6 +98,36 @@ class SelfAttention(nn.Module):
         attention = attention.permute(0, 1, 3, 2).contiguous().view(B, self.num_heads * self.head_dim, H, W)
         return self.norm(x + self.proj(attention))
     
+class FlashSelfAttention(nn.Module):
+    def __init__(self,
+        in_channels,
+        num_heads=8,
+        head_dim=32,
+        mask=None,
+        dropout=0.0,
+        groups=32
+    ) -> None:
+        super().__init__()
+        self.scale = head_dim ** -0.5
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.q = nn.Conv2d(in_channels, num_heads * head_dim, kernel_size=1)
+        self.k = nn.Conv2d(in_channels, num_heads * head_dim, kernel_size=1)
+        self.v = nn.Conv2d(in_channels, num_heads * head_dim, kernel_size=1)
+        self.norm = nn.GroupNorm(groups, in_channels)
+        self.proj = nn.Conv2d(num_heads * head_dim, in_channels, kernel_size=1)
+        self.mask = mask # TODO (process)
+        self.dropout = dropout
+
+    def forward(self, x):
+        B, _, H, W = x.shape
+        q = self.q(x).view(B, self.num_heads, self.head_dim, H * W).permute(0, 1, 3, 2).contiguous()
+        k = self.k(x).view(B, self.num_heads, self.head_dim, H * W).permute(0, 1, 3, 2).contiguous()
+        v = self.v(x).view(B, self.num_heads, self.head_dim, H * W).permute(0, 1, 3, 2).contiguous()
+        attention = F.scaled_dot_product_attention(q, k, v, attn_mask=self.mask, dropout_p=self.dropout)
+        attention = attention.permute(0, 1, 3, 2).contiguous().view(B, self.num_heads * self.head_dim, H, W)
+        return self.norm(x + self.proj(attention))
+    
 class EncodingBlock(nn.Module):
     def __init__(self, in_channels, out_channels, temb_dim=None, downsample=True, attn=False, num_blocks=2, groups=32) -> None:
         super().__init__()

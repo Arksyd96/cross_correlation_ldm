@@ -47,6 +47,7 @@ if __name__ == "__main__":
             dims,
             config.models.autoencoder.target
         ),
+        resume="allow"
     )
 
     try: # autoencoder
@@ -65,7 +66,7 @@ if __name__ == "__main__":
         **config.data,
         autoencoder=autoencoder,
         use_latents=True,
-        depth_as_channels=False,
+        depth_as_channels=True,
         batch_size=16, 
         shuffle=True, 
         num_workers=8
@@ -82,7 +83,7 @@ if __name__ == "__main__":
         shape=config.models.autoencoder.latent_shape,
         num_slices=config.data.shape[0],
         autoencoder=autoencoder,
-        every_n_epochs=1
+        every_n_epochs=50
     )
 
     # fid_logger = FIDLogger(
@@ -97,7 +98,11 @@ if __name__ == "__main__":
         raise AttributeError('Unknown UNet target')
     
     # loading unet weights
-    unet_weights = glob.glob(config.callbacks.checkpoint.dirpath + '/UNet{}*.ckpt'.format(dims))
+    unet_weights = glob.glob('{}/UNet{}-{}*.ckpt'.format(
+        config.callbacks.checkpoint.dirpath,
+        dims,
+        type(autoencoder).__name__
+    ))    
 
     if unet_weights.__len__() != 0 and config.models.unet.from_checkpoint:
         unet = unet_target_class.load_from_checkpoint(unet_weights[-1])
@@ -112,10 +117,9 @@ if __name__ == "__main__":
         logger=logger,
         accelerator='gpu',
         precision='16-mixed',
-        max_epochs=20000,
+        max_epochs=40000,
         log_every_n_steps=1,
         enable_progress_bar=True,
-        fast_dev_run=5,
         callbacks=[checkpoint_callback, image_logger]
     )
     trainer.fit(unet, data_module)

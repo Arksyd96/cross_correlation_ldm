@@ -1,6 +1,6 @@
 data:
     shape: [64, 128, 128] # depth, height, width
-    n_samples: 10
+    n_samples: 500
     modalities:
     - flair
     - t1ce
@@ -22,11 +22,11 @@ callbacks:
         filename: fid_state_dict.pt
 models:
     unet:
-        input_shape: [4, 64, 32, 32] # channels, (depth), height, width
-        learning_rate: 0.00001
+        input_shape: [16, 128, 128] # channels, (depth), height, width
+        learning_rate: 0.000001
         T: 1000
         num_channels: 128
-        from_checkpoint: false
+        from_checkpoint: true
         channel_mult: 
         - 1
         - 2
